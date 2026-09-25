@@ -1,21 +1,24 @@
-"""Main application window."""
+"""Main application window (Command and Learn pages)."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from core.config import Config
 from core.models import TaskState
+from ui.learn_page import LearnPage
 from ui.widgets import HintLabel, StatusIndicator
 
 
@@ -23,6 +26,7 @@ class MainWindow(QMainWindow):
     run_requested = Signal(str)
     stop_requested = Signal()
     voice_requested = Signal()
+    page_changed = Signal(int)  # 0 = Command, 1 = Learn
 
     def __init__(self) -> None:
         super().__init__()
@@ -31,7 +35,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(Config.APP_NAME)
         self.setMinimumSize(Config.WINDOW_MIN_WIDTH, Config.WINDOW_MIN_HEIGHT)
-        self.resize(620, 380)
+        self.resize(720, 440)
         self._restore_geometry()
 
         self.setCentralWidget(self._build_ui())
@@ -41,8 +45,41 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> QWidget:
         root = QWidget()
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(28, 24, 28, 22)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(28, 18, 28, 22)
+        outer.setSpacing(10)
+
+        nav = QHBoxLayout()
+        nav.setSpacing(8)
+        self._nav_command = QPushButton("Command")
+        self._nav_command.setObjectName("navButton")
+        self._nav_command.setCheckable(True)
+        self._nav_command.setChecked(True)
+        self._nav_learn = QPushButton("Learn")
+        self._nav_learn.setObjectName("navButton")
+        self._nav_learn.setCheckable(True)
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        self._nav_group.addButton(self._nav_command, 0)
+        self._nav_group.addButton(self._nav_learn, 1)
+        nav.addWidget(self._nav_command)
+        nav.addWidget(self._nav_learn)
+        nav.addStretch(1)
+        outer.addLayout(nav)
+
+        self._stack = QStackedWidget()
+        self._command_page = self._build_command_page()
+        self._learn_page = LearnPage()
+        self._stack.addWidget(self._command_page)  # index 0
+        self._stack.addWidget(self._learn_page)  # index 1
+        outer.addWidget(self._stack, stretch=1)
+
+        return root
+
+    def _build_command_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(16)
 
         header = QHBoxLayout()
@@ -51,7 +88,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel(Config.APP_NAME)
         title.setObjectName("appTitle")
-        subtitle = QLabel("Control engine · Milestone 2")
+        subtitle = QLabel("Control engine · Milestone 3")
         subtitle.setObjectName("appSubtitle")
 
         title_box.addWidget(title)
@@ -109,13 +146,14 @@ class MainWindow(QMainWindow):
         self._hint.setMinimumHeight(18)
         layout.addWidget(self._hint)
 
-        return root
+        return page
 
     def _wire(self) -> None:
         self._run_button.clicked.connect(self._emit_run)
         self._stop_button.clicked.connect(self.stop_requested)
         self._voice_button.clicked.connect(self.voice_requested)
         self._command_input.returnPressed.connect(self._emit_run)
+        self._nav_group.idClicked.connect(self._on_nav_clicked)
 
     # ------------------------------------------------------------- signals
 
@@ -123,7 +161,16 @@ class MainWindow(QMainWindow):
     def _emit_run(self) -> None:
         self.run_requested.emit(self.command())
 
+    @Slot(int)
+    def _on_nav_clicked(self, index: int) -> None:
+        self._stack.setCurrentIndex(index)
+        self.page_changed.emit(index)
+
     # ----------------------------------------------------------- interface
+
+    @property
+    def learn_page(self) -> LearnPage:
+        return self._learn_page
 
     def command(self) -> str:
         return self._command_input.text()

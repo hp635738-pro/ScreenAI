@@ -59,7 +59,7 @@ Version: ${APP_VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.12), python3-pyside6.qtwidgets, python3-pyside6.qtsvg, python3-pyautogui
+Depends: python3 (>= 3.12), python3-pyside6.qtwidgets, python3-pyside6.qtsvg, python3-pyautogui, python3-pil, python3-mss, python3-pynput
 Recommends: xdotool
 Maintainer: ${MAINTAINER}
 Homepage: ${HOMEPAGE}

@@ -181,3 +181,93 @@ QLabel#stepLabel {
     font-size: 12px;
     font-weight: 600;
 }
+
+QPushButton#navButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 7px 18px;
+    color: #9AA0B4;
+    font-weight: 600;
+}
+
+QPushButton#navButton:hover {
+    background-color: #23253A;
+    color: #E6E7F0;
+}
+
+QPushButton#navButton:checked {
+    background-color: #23253A;
+    border-color: #5B7CFA;
+    color: #A8B8FF;
+}
+
+QPushButton#saveButton {
+    border-color: #4ADE80;
+    color: #4ADE80;
+}
+
+QPushButton#saveButton:hover {
+    background-color: #1F3328;
+    border-color: #4ADE80;
+}
+
+QPushButton#saveButton:disabled {
+    color: #4A6A55;
+    border-color: #2A3A30;
+}
+
+QLineEdit#learnField {
+    background-color: #1C1D2B;
+    border: 1px solid #323552;
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+QLineEdit#learnField:focus {
+    border-color: #5B7CFA;
+}
+
+QListWidget#stepsList {
+    background-color: #1C1D2B;
+    border: 1px solid #323552;
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+}
+
+QListWidget#stepsList::item {
+    padding: 4px 6px;
+    border-radius: 4px;
+    color: #E6E7F0;
+}
+
+QListWidget#stepsList::item:selected {
+    background-color: #2C2F4A;
+}
+
+QComboBox#captureMode {
+    background-color: #23253A;
+    border: 1px solid #323552;
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: #E6E7F0;
+}
+
+QComboBox#captureMode::drop-down {
+    border: none;
+}
+
+QComboBox#captureMode QAbstractItemView {
+    background-color: #23253A;
+    border: 1px solid #323552;
+    selection-background-color: #2C2F4A;
+    color: #E6E7F0;
+}
+
+QLabel#previewLabel {
+    background-color: #1C1D2B;
+    border: 1px solid #323552;
+    border-radius: 8px;
+    color: #8A90B0;
+}

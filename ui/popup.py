@@ -159,6 +159,39 @@ class ExecutionPopup(QWidget):
         self._step_label.setText(f"Step {index}/{total}")
         self._step_label.show()
 
+    def set_step_text(self, text: str) -> None:
+        self._step_label.setText(text)
+        self._step_label.show()
+
+    def begin_recording(self) -> None:
+        """Learn Mode: 'Recording… / Click File / Step 4' display."""
+        self._task_label.setText("Recording…")
+        self._task_label.setToolTip("")
+        self._progress_label.setText("Recording…")
+        self.set_step_text("Step 0")
+        self._notice.clear()
+        self.set_state(TaskState.WORKING)
+
+    def update_recording(self, count: int, description: str) -> None:
+        self.set_step_text(f"Step {count}")
+        self._progress_label.setText(description)
+
+    def begin_playback(self, label: str, total: int) -> None:
+        """Workflow playback: 'Playing… / Found Export / Step 6/9' display."""
+        self._task_label.setText("Playing…")
+        self._task_label.setToolTip(label)
+        self._progress_label.setText("Playing…")
+        if total > 0:
+            self.set_step(1, total)
+        else:
+            self.set_step_text("Step 0")
+        self._notice.clear()
+        self.set_state(TaskState.WORKING)
+
+    def update_playback(self, index: int, total: int, message: str) -> None:
+        self.set_step(index, total)
+        self._progress_label.setText(message)
+
     def set_state(self, state: TaskState) -> None:
         self._status.set_state(state)
         active = state is TaskState.WORKING

@@ -125,3 +125,94 @@ class ActionRecord:
     success: bool
     duration: float
     timestamp: str | None = None
+
+
+# --------------------------------------------------------------------------
+# Milestone 3: learn-mode models (recorded workflows)
+# --------------------------------------------------------------------------
+
+_KEY_DISPLAY = {
+    "ctrl": "Ctrl",
+    "shift": "Shift",
+    "alt": "Alt",
+    "super": "Super",
+    "enter": "Enter",
+    "escape": "Esc",
+    "tab": "Tab",
+    "space": "Space",
+    "backspace": "Backspace",
+    "delete": "Delete",
+}
+
+
+def format_keys(keys: str) -> str:
+    """Format a key combination for display: 'ctrl+s' -> 'Ctrl+S'."""
+    parts = [part for part in keys.replace("+", " ").split() if part]
+    return "+".join(
+        _KEY_DISPLAY.get(part.lower(), part.upper() if len(part) == 1 else part.title())
+        for part in parts
+    )
+
+
+@dataclass(slots=True)
+class LearnedStep:
+    """One recorded user action (a workflow step)."""
+
+    action: ActionType
+    target_text: str | None = None
+    coordinates: tuple[int, int] | None = None
+    delay: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def description(self) -> str:
+        if self.action is ActionType.TYPE_TEXT:
+            text = (self.target_text or "").replace("\n", " ")
+            shown = text if len(text) <= 24 else text[:24] + "…"
+            return f"Type “{shown}”"
+        if self.action in (ActionType.HOTKEY, ActionType.PRESS_KEY):
+            return f"Press {format_keys(self.target_text or '')}"
+        verb = {
+            ActionType.LEFT_CLICK: "Click",
+            ActionType.RIGHT_CLICK: "Right-click",
+            ActionType.DOUBLE_CLICK: "Double-click",
+        }.get(self.action, "Click")
+        if self.target_text:
+            return f"{verb} {self.target_text}"
+        if self.coordinates:
+            return f"{verb} at ({self.coordinates[0]}, {self.coordinates[1]})"
+        return verb
+
+    @property
+    def coordinates_text(self) -> str | None:
+        if self.coordinates is None:
+            return None
+        return f"{self.coordinates[0]},{self.coordinates[1]}"
+
+
+@dataclass(slots=True)
+class WorkflowSummary:
+    id: int
+    app_name: str
+    task_name: str
+    created_at: str
+    step_count: int = 0
+
+    @property
+    def label(self) -> str:
+        return f"{self.app_name}: {self.task_name}"
+
+
+@dataclass(slots=True)
+class Workflow:
+    """A saved demonstration: metadata plus ordered steps."""
+
+    id: int | None
+    app_name: str
+    task_name: str
+    created_at: str | None = None
+    steps: list[LearnedStep] = field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        return f"{self.app_name}: {self.task_name}"

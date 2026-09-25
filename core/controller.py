@@ -1,4 +1,4 @@
-"""Application controller: wires UI, control engines and persistence.
+"""Application controller: wires UI, engines and persistence.
 
 This is the only place that knows about both sides; windows and services
 stay independent and communicate through signals and slots.
@@ -11,14 +11,20 @@ import time
 from PySide6.QtCore import QObject, Slot
 
 from core.app_launcher import AppLauncher
+from core.automation import Automation
 from core.intent_parser import IntentParser
+from core.learn_mode import WorkflowRecorder
 from core.models import ActionResult, ActionType, PlanResult, TaskState
+from core.ocr import OcrEngine
 from core.plan_executor import PlanExecutor
 from core.task_manager import TaskManager
+from core.vision import VisionEngine, VisionError
 from core.voice_service import VoiceService
+from core.workflow_player import StepPlaybackResult, WorkflowPlayer
 from database.action_repository import ActionRepository
 from database.db_manager import DatabaseManager
 from database.task_repository import TaskRepository
+from database.workflow_repository import WorkflowRepository
 from ui.main_window import MainWindow
 from ui.popup import ExecutionPopup
 
@@ -33,18 +39,29 @@ class ApplicationController(QObject):
             known_apps=AppLauncher.known_names,
             display_name=AppLauncher.display_name,
         )
-        self._executor = PlanExecutor(self, launcher=self._launcher)
+        self._automation = Automation()
+        self._executor = PlanExecutor(
+            self, launcher=self._launcher, automation=self._automation
+        )
         self._tasks = TaskManager(self)  # Milestone 1 simulation engine
         self._voice = VoiceService(self)
+        self._vision = VisionEngine(self)
+        self._ocr = OcrEngine(vision=self._vision)
+        self._recorder = WorkflowRecorder(self, target_resolver=self._click_target)
+        self._player = WorkflowPlayer(
+            self, vision=self._vision, ocr=self._ocr, automation=self._automation
+        )
         self._db = DatabaseManager()
         self._repository = TaskRepository(self._db)
         self._action_repository = ActionRepository(self._db)
+        self._workflow_repository = WorkflowRepository(self._db)
         self._current_run_id: int | None = None
         self._active_command = ""
         self._run_started = 0.0
         self._simulate_run = False
 
         self._wire()
+        self._reload_workflows()
 
     # ------------------------------------------------------------- wiring
 
@@ -53,6 +70,7 @@ class ApplicationController(QObject):
         window.run_requested.connect(self._on_run_requested)
         window.stop_requested.connect(self._on_stop_requested)
         window.voice_requested.connect(self._voice.start_listening)
+        window.page_changed.connect(self._on_page_changed)
         self._voice.notice.connect(window.show_notice)
 
         popup = self._popup
@@ -74,6 +92,28 @@ class ApplicationController(QObject):
         executor.plan_completed.connect(self._on_plan_completed)
         executor.notice.connect(self._on_task_notice)
 
+        learn = window.learn_page
+        learn.start_recording_requested.connect(self._on_start_recording)
+        learn.stop_recording_requested.connect(self._on_stop_recording)
+        learn.save_workflow_requested.connect(self._on_save_workflow)
+        learn.play_workflow_requested.connect(self._on_play_workflow)
+        learn.capture_mode_changed.connect(self._on_capture_mode_changed)
+
+        recorder = self._recorder
+        recorder.step_recorded.connect(self._on_step_recorded)
+        recorder.recording_stopped.connect(self._on_recording_stopped)
+        recorder.notice.connect(self._on_task_notice)
+
+        player = self._player
+        player.step_started.connect(self._on_playback_step)
+        player.progress.connect(self._on_playback_progress)
+        player.step_finished.connect(self._on_playback_step_finished)
+        player.playback_completed.connect(self._on_playback_completed)
+        player.notice.connect(self._on_task_notice)
+
+        self._vision.frame_ready.connect(self._on_frame)
+        self._vision.error.connect(self._on_vision_error)
+
     # ---------------------------------------------------------- lifecycle
 
     def start(self) -> None:
@@ -82,11 +122,22 @@ class ApplicationController(QObject):
 
     def shutdown(self) -> None:
         self._window.save_geometry()
+        self._recorder.stop()
+        self._player.shutdown()
+        self._vision.shutdown()
         self._executor.shutdown()
         self._tasks.shutdown()
         self._db.close()
 
-    # -------------------------------------------------------------- slots
+    def _is_busy(self) -> bool:
+        return (
+            self._tasks.is_running
+            or self._executor.is_running
+            or self._player.is_running
+            or self._recorder.is_recording
+        )
+
+    # ------------------------------------------------- command execution
 
     @Slot(str)
     def _on_run_requested(self, command: str) -> None:
@@ -94,7 +145,7 @@ class ApplicationController(QObject):
         if not command:
             self._window.show_notice("Enter a command before running.")
             return
-        if self._tasks.is_running or self._executor.is_running:
+        if self._is_busy():
             self._window.show_notice("A task is already running — press Stop to cancel.")
             return
 
@@ -129,11 +180,20 @@ class ApplicationController(QObject):
     @Slot()
     def _on_stop_requested(self) -> None:
         """Global emergency stop: cancels whatever is executing."""
+        stopped = False
         if self._executor.is_running:
             self._executor.emergency_stop()
+            stopped = True
+        if self._player.is_running:
+            self._player.stop()
+            stopped = True
         if self._tasks.is_running:
             self._tasks.stop()
-        if not self._executor.is_running and not self._tasks.is_running:
+            stopped = True
+        if self._recorder.is_recording:
+            self._on_stop_recording()
+            stopped = True
+        if not stopped:
             self._window.show_notice("Nothing is running.")
 
     @Slot()
@@ -217,7 +277,166 @@ class ApplicationController(QObject):
         self._popup.show_notice(text)
         self._window.show_notice(text)
 
+    # ------------------------------------------------------- learn mode
+
+    @Slot()
+    def _on_start_recording(self) -> None:
+        if self._is_busy():
+            self._window.show_notice("A task is already running — press Stop to cancel.")
+            return
+        if not self._recorder.start():
+            return  # recorder emitted a notice
+        self._window.learn_page.set_recording(True)
+        self._window.set_state(TaskState.WORKING)
+        self._window.minimize()
+        self._popup.begin_recording()
+        self._popup.show_popup()
+
+    @Slot()
+    def _on_stop_recording(self) -> None:
+        if not self._recorder.is_recording:
+            self._window.show_notice("Not recording.")
+            return
+        self._recorder.stop()  # recording_stopped slot does the UI updates
+
+    @Slot(int)
+    def _on_recording_stopped(self, count: int) -> None:
+        self._window.learn_page.set_steps(self._recorder.steps)
+        self._window.learn_page.set_recording(False)
+        self._window.set_state(TaskState.DONE)
+        self._popup.set_state(TaskState.DONE)
+        self._popup.set_progress("Recorded")
+        message = (
+            f"Recorded {count} steps — set App/Task name and press Save Workflow"
+        )
+        self._popup.show_notice(message)
+        self._window.show_notice(message)
+        self._window.restore()
+
+    @Slot(object)
+    def _on_step_recorded(self, step) -> None:  # noqa: ANN001
+        count = len(self._recorder.steps)
+        self._popup.update_recording(count, step.description)
+        self._window.learn_page.set_steps(self._recorder.steps)
+
+    @Slot(str, str)
+    def _on_save_workflow(self, app_name: str, task_name: str) -> None:
+        if self._recorder.is_recording:
+            self._window.show_notice("Stop recording before saving.")
+            return
+        steps = self._recorder.steps
+        if not steps:
+            self._window.show_notice("Record some steps first.")
+            return
+        workflow = self._workflow_repository.save_workflow(app_name, task_name, steps)
+        self._recorder.clear()
+        self._window.learn_page.set_steps([])
+        self._reload_workflows()
+        message = f"Saved workflow “{workflow.label}” ({len(steps)} steps)"
+        self._window.show_notice(message)
+
+    @Slot(int)
+    def _on_play_workflow(self, workflow_id: int) -> None:
+        if self._is_busy():
+            self._window.show_notice("A task is already running — press Stop to cancel.")
+            return
+        workflow = self._workflow_repository.load_workflow(workflow_id)
+        if workflow is None or not workflow.steps:
+            self._window.show_notice("Workflow not found or empty.")
+            return
+        self._active_workflow_label = workflow.label
+        self._window.set_state(TaskState.WORKING)
+        self._window.minimize()
+        self._popup.begin_playback(workflow.label, len(workflow.steps))
+        self._popup.show_popup()
+        self._player.play(workflow)
+
+    @Slot(int, int, str)
+    def _on_playback_step(self, index: int, total: int, description: str) -> None:
+        self._popup.update_playback(index, total, description)
+
+    @Slot(str)
+    def _on_playback_progress(self, message: str) -> None:
+        self._popup.set_progress(message)
+
+    @Slot(object)
+    def _on_playback_step_finished(self, result: StepPlaybackResult) -> None:
+        label = getattr(self, "_active_workflow_label", "") or "workflow"
+        self._action_repository.record(
+            f"workflow: {label}",
+            result.step.description,
+            result.success,
+            0.0,
+        )
+
+    @Slot(object)
+    def _on_playback_completed(self, result) -> None:  # noqa: ANN001
+        if result.cancelled:
+            state = TaskState.ERROR
+            summary = f"Playback stopped — {result.summary.lower()}"
+            popup_progress = "Stopped"
+        elif result.success:
+            state = TaskState.DONE
+            summary = result.summary
+            popup_progress = "Completed"
+        else:
+            state = TaskState.ERROR
+            summary = result.first_error or "Playback failed"
+            popup_progress = "Failed"
+        self._window.set_state(state)
+        self._window.show_notice(summary)
+        self._popup.set_state(state)
+        self._popup.set_progress(popup_progress)
+
+    # -------------------------------------------------------- vision/preview
+
+    @Slot(int)
+    def _on_page_changed(self, index: int) -> None:
+        if index == 1:  # Learn page
+            try:
+                self._window.learn_page.set_monitor_options(self._vision.list_monitors())
+            except VisionError as exc:
+                self._window.learn_page.show_message(f"Capture unavailable: {exc}")
+            mode, monitor = self._window.learn_page.current_capture_mode()
+            self._vision.start_stream(mode=mode, monitor=monitor)
+        else:
+            self._vision.stop_stream()
+
+    @Slot(str, int)
+    def _on_capture_mode_changed(self, mode: str, monitor: int) -> None:
+        if self._vision.is_streaming:
+            self._vision.start_stream(mode=mode, monitor=monitor)
+
+    @Slot(object)
+    def _on_frame(self, frame) -> None:  # noqa: ANN001
+        self._window.learn_page.set_preview(frame.qimage)
+
+    @Slot(str)
+    def _on_vision_error(self, message: str) -> None:
+        self._window.learn_page.show_message(message)
+
     # ------------------------------------------------------------ helpers
+
+    def _click_target(self, x: int, y: int) -> str | None:
+        """OCR label for a recorded click (runs on the listener thread)."""
+        try:
+            frame = self._vision.grab()
+            detections = self._ocr.detect_text(frame.pil_image)
+        except Exception:  # noqa: BLE001 - labeling is best-effort
+            return None
+        origin_x, origin_y = frame.geometry[0], frame.geometry[1]
+        best, best_area = None, None
+        for detection in detections:
+            bx, by, bw, bh = detection.bbox
+            left, top = origin_x + bx, origin_y + by
+            if left - 8 <= x <= left + bw + 8 and top - 8 <= y <= top + bh + 8:
+                area = bw * bh
+                if best_area is None or area < best_area:
+                    best, best_area = detection.text, area
+        return best
+
+    def _reload_workflows(self) -> None:
+        self._window.learn_page.set_workflows(self._workflow_repository.list_workflows())
 
     def _record_simulate_action(self, success: bool) -> None:
         if self._simulate_run:
