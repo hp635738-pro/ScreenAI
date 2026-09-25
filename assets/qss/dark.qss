@@ -1,0 +1,157 @@
+/* ScreenAI — dark theme */
+
+QMainWindow, QDialog {
+    background-color: #14151F;
+}
+
+QWidget {
+    background-color: transparent;
+    color: #E6E7F0;
+    font-size: 14px;
+}
+
+QLabel#appTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #F4F5FB;
+}
+
+QLabel#appSubtitle {
+    color: #8A90B0;
+    font-size: 12px;
+}
+
+QLabel#fieldLabel {
+    color: #9AA0B4;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#hintLabel {
+    color: #8A90B0;
+    font-size: 12px;
+}
+
+QLabel#statusLabel {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QLabel#statusLabel[state="idle"]    { color: #9AA0B4; }
+QLabel#statusLabel[state="working"] { color: #FBBF24; }
+QLabel#statusLabel[state="done"]    { color: #4ADE80; }
+QLabel#statusLabel[state="error"]   { color: #F87171; }
+
+QLineEdit#commandInput {
+    background-color: #1C1D2B;
+    border: 1px solid #323552;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    selection-background-color: #5B7CFA;
+}
+
+QLineEdit#commandInput:focus {
+    border-color: #5B7CFA;
+}
+
+QPushButton {
+    background-color: #23253A;
+    border: 1px solid #323552;
+    border-radius: 8px;
+    padding: 9px 18px;
+    font-weight: 600;
+    color: #E6E7F0;
+}
+
+QPushButton:hover {
+    background-color: #2C2F4A;
+    border-color: #3D4168;
+}
+
+QPushButton:pressed {
+    background-color: #1A1C2A;
+}
+
+QPushButton:disabled {
+    color: #6A6F8A;
+    background-color: #1B1C2B;
+    border-color: #2A2C42;
+}
+
+QPushButton#runButton {
+    background-color: #5B7CFA;
+    border: 1px solid #5B7CFA;
+    color: #FFFFFF;
+    padding: 9px 26px;
+}
+
+QPushButton#runButton:hover {
+    background-color: #6C8AFF;
+    border-color: #6C8AFF;
+}
+
+QPushButton#runButton:pressed {
+    background-color: #4A6BE0;
+}
+
+QPushButton#runButton:disabled {
+    background-color: #343B63;
+    border-color: #343B63;
+    color: #8A90B8;
+}
+
+QPushButton#restoreButton {
+    border-color: #5B7CFA;
+    color: #A8B8FF;
+}
+
+QPushButton#restoreButton:hover {
+    border-color: #6C8AFF;
+    background-color: #262B4A;
+}
+
+QFrame#popupCard {
+    background-color: #1B1C2B;
+    border: 1px solid #34375A;
+    border-radius: 14px;
+}
+
+QLabel#popupTitle {
+    color: #A8AED0;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#popupTask {
+    color: #F4F5FB;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel#progressLabel {
+    color: #9AA0B4;
+    font-size: 12px;
+}
+
+QPushButton#dismissButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 16px;
+    font-weight: 400;
+    color: #9AA0B4;
+}
+
+QPushButton#dismissButton:hover {
+    background-color: #2C2F4A;
+    color: #F87171;
+}
+
+QToolTip {
+    background-color: #23253A;
+    color: #E6E7F0;
+    border: 1px solid #323552;
+    padding: 4px 8px;
+}
