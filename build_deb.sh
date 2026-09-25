@@ -6,6 +6,7 @@
 #
 # Install:
 #   sudo apt install ./dist/screenai_<version>_all.deb
+#   sudo apt remove --purge screenai   # clean uninstall
 #
 # The package installs the app under /usr/lib/screenai with a launcher at
 # /usr/bin/screenai. Runtime dependencies (python3-pyside6) are declared
@@ -26,9 +27,9 @@ APP_VERSION="$(python3 - <<'PY'
 import pathlib
 import re
 
-text = pathlib.Path("core/config.py").read_text(encoding="utf-8")
+text = pathlib.Path("core/version.py").read_text(encoding="utf-8")
 match = re.search(r'^\s*VERSION = "(.+?)"', text, re.MULTILINE)
-assert match, "VERSION not found in core/config.py"
+assert match, "VERSION not found in core/version.py"
 print(match.group(1))
 PY
 )"
@@ -67,9 +68,9 @@ Description: AI-powered screen assistant and desktop control engine
  ScreenAI is a personal desktop assistant for Kubuntu/KDE. It parses
  natural commands locally and executes them: launching applications,
  running terminal commands and driving mouse/keyboard automation with
- a floating always-on-top execution popup and a global emergency stop.
- (Milestone 4 AI brain: OpenAI/Ollama tool-using agent with a safety
- manager, confirmation flow and learn-mode workflows.)
+ a floating always-on-top execution popup and an emergency stop.
+ Includes an OpenAI/Ollama tool-using agent, voice input, learn-mode
+ workflows, system tray control and a confirmation safety model.
 EOF
 
 cat > "${STAGE}/usr/bin/${APP_NAME}" <<EOF

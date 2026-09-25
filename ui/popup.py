@@ -61,7 +61,7 @@ class ExecutionPopup(QWidget):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel("EXECUTION")
+        title = QLabel("ScreenAI")
         title.setObjectName("popupTitle")
         self._pass_through(title)
 
@@ -74,6 +74,11 @@ class ExecutionPopup(QWidget):
         header.addStretch(1)
         header.addWidget(self._dismiss_button)
         layout.addLayout(header)
+
+        task_caption = QLabel("Current task:")
+        task_caption.setObjectName("popupCaption")
+        self._pass_through(task_caption)
+        layout.addWidget(task_caption)
 
         self._task_label = QLabel()
         self._task_label.setObjectName("popupTask")
@@ -95,6 +100,11 @@ class ExecutionPopup(QWidget):
         status_row.addStretch(1)
         status_row.addWidget(self._step_label)
         layout.addLayout(status_row)
+
+        status_caption = QLabel("Status:")
+        status_caption.setObjectName("popupCaption")
+        self._pass_through(status_caption)
+        layout.addWidget(status_caption)
 
         self._progress_label = QLabel()
         self._progress_label.setObjectName("progressLabel")
@@ -128,7 +138,7 @@ class ExecutionPopup(QWidget):
         self._pause_button = QPushButton("Pause")
         self._pause_button.setObjectName("pauseButton")
         self._pause_button.setToolTip(
-            "UI placeholder — real pause arrives with AI integration"
+            "Pause the agent — the current step finishes, no new actions start"
         )
         self._stop_button = QPushButton("Stop")
         self._stop_button.setObjectName("stopButton")
@@ -181,7 +191,7 @@ class ExecutionPopup(QWidget):
         self.set_step(1, total_steps)
 
     def set_step(self, index: int, total: int) -> None:
-        self._step_label.setText(f"Step {index}/{total}")
+        self._step_label.setText(f"Step {index} / {total}")
         self._step_label.show()
 
     def set_step_text(self, text: str) -> None:
@@ -237,6 +247,9 @@ class ExecutionPopup(QWidget):
         self._confirm_button.show()
         self._decline_button.show()
         self._progress_label.setText("Waiting for confirmation")
+
+    def set_paused(self, paused: bool) -> None:
+        self._pause_button.setText("Resume" if paused else "Pause")
 
     def hide_confirmation(self) -> None:
         self._confirm_label.hide()

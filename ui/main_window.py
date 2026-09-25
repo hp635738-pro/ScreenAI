@@ -1,4 +1,4 @@
-"""Main application window (Command and Learn pages)."""
+"""Main application window: Home · AI/Chat · Learn · Workflows · History · Settings."""
 
 from __future__ import annotations
 
@@ -18,25 +18,45 @@ from PySide6.QtWidgets import (
 
 from core.config import Config
 from core.models import TaskState
+from core.settings import SettingsStore
+from core.version import APP_NAME, VERSION
+from ui.chat_page import ChatPage
+from ui.history_page import HistoryPage
 from ui.learn_page import LearnPage
+from ui.settings_panel import SettingsPanel
 from ui.widgets import HintLabel, StatusIndicator
+from ui.workflow_page import WorkflowPage
 
 
 class MainWindow(QMainWindow):
+    # Section indices (kept as constants — the controller navigates by them).
+    PAGE_HOME = 0
+    PAGE_CHAT = 1
+    PAGE_LEARN = 2
+    PAGE_WORKFLOWS = 3
+    PAGE_HISTORY = 4
+    PAGE_SETTINGS = 5
+
     run_requested = Signal(str)
     stop_requested = Signal()
-    voice_requested = Signal()
+    voice_requested = Signal()  # mic click (legacy)
+    voice_ptt_started = Signal()  # mic pressed — push to talk
+    voice_ptt_ended = Signal()  # mic released
     settings_requested = Signal()
-    page_changed = Signal(int)  # 0 = Command, 1 = Learn
+    settings_saved = Signal()
+    page_changed = Signal(int)
+    hidden_to_tray = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, settings: SettingsStore | None = None) -> None:
         super().__init__()
         self._positioned = False
-        self._settings = QSettings()
+        self._qsettings = QSettings()
+        self._settings = settings
+        self._close_to_tray = True
 
-        self.setWindowTitle(Config.APP_NAME)
+        self.setWindowTitle(f"{APP_NAME} {VERSION}")
         self.setMinimumSize(Config.WINDOW_MIN_WIDTH, Config.WINDOW_MIN_HEIGHT)
-        self.resize(720, 440)
+        self.resize(760, 480)
         self._restore_geometry()
 
         self.setCentralWidget(self._build_ui())
@@ -51,59 +71,76 @@ class MainWindow(QMainWindow):
         outer.setSpacing(10)
 
         nav = QHBoxLayout()
-        nav.setSpacing(8)
-        self._nav_command = QPushButton("Command")
-        self._nav_command.setObjectName("navButton")
-        self._nav_command.setCheckable(True)
-        self._nav_command.setChecked(True)
-        self._nav_learn = QPushButton("Learn")
-        self._nav_learn.setObjectName("navButton")
-        self._nav_learn.setCheckable(True)
+        nav.setSpacing(6)
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        self._nav_group.addButton(self._nav_command, 0)
-        self._nav_group.addButton(self._nav_learn, 1)
-        self._settings_button = QPushButton("Settings")
-        self._settings_button.setObjectName("navButton")
-        self._settings_button.setToolTip("AI engine, privacy and confirmations")
-        nav.addWidget(self._nav_command)
-        nav.addWidget(self._nav_learn)
+        self._nav_buttons: dict[int, QPushButton] = {}
+        labels = {
+            self.PAGE_HOME: "Home",
+            self.PAGE_CHAT: "AI / Chat",
+            self.PAGE_LEARN: "Learn",
+            self.PAGE_WORKFLOWS: "Workflows",
+            self.PAGE_HISTORY: "History",
+            self.PAGE_SETTINGS: "Settings",
+        }
+        for index, label in labels.items():
+            button = QPushButton(label)
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.setChecked(index == self.PAGE_HOME)
+            self._nav_group.addButton(button, index)
+            self._nav_buttons[index] = button
+            nav.addWidget(button)
         nav.addStretch(1)
-        nav.addWidget(self._settings_button)
         outer.addLayout(nav)
 
         self._stack = QStackedWidget()
-        self._command_page = self._build_command_page()
+        self._home_page = self._build_home_page()
+        self._chat_page = ChatPage()
         self._learn_page = LearnPage()
-        self._stack.addWidget(self._command_page)  # index 0
-        self._stack.addWidget(self._learn_page)  # index 1
+        self._workflow_page = WorkflowPage()
+        self._history_page = HistoryPage()
+        self._settings_page = self._build_settings_page()
+        for page in (
+            self._home_page,
+            self._chat_page,
+            self._learn_page,
+            self._workflow_page,
+            self._history_page,
+            self._settings_page,
+        ):
+            self._stack.addWidget(page)
         outer.addWidget(self._stack, stretch=1)
-
         return root
 
-    def _build_command_page(self) -> QWidget:
+    def _build_home_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-
-        title = QLabel(Config.APP_NAME)
+        title = QLabel(APP_NAME)
         title.setObjectName("appTitle")
-        subtitle = QLabel("AI desktop agent · Milestone 4")
+        subtitle = QLabel(f"AI desktop agent · v{VERSION}")
         subtitle.setObjectName("appSubtitle")
-
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch(1)
 
+        self._provider_label = QLabel("")
+        self._provider_label.setObjectName("keyStatus")
+        header.addWidget(self._provider_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         self._status = StatusIndicator()
         header.addWidget(self._status, alignment=Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header)
+
+        self._task_status = QLabel("Ready")
+        self._task_status.setObjectName("keyStatus")
+        layout.addWidget(self._task_status)
 
         field_label = QLabel("Command")
         field_label.setObjectName("fieldLabel")
@@ -124,7 +161,7 @@ class MainWindow(QMainWindow):
         self._voice_button = QPushButton("Voice")
         self._voice_button.setObjectName("voiceButton")
         self._voice_button.setIcon(QIcon(str(Config.asset_path("icons", "mic.svg"))))
-        self._voice_button.setToolTip("Voice input — placeholder in this milestone")
+        self._voice_button.setToolTip("Hold to speak (push-to-talk); release to transcribe")
 
         self._stop_button = QPushButton("Stop")
         self._stop_button.setObjectName("stopButton")
@@ -151,16 +188,36 @@ class MainWindow(QMainWindow):
         )
         self._hint.setMinimumHeight(18)
         layout.addWidget(self._hint)
+        return page
 
+    def _build_settings_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        if self._settings is None:
+            placeholder = QLabel("Settings are unavailable (no settings store).")
+            layout.addWidget(placeholder)
+            return page
+        self._settings_panel = SettingsPanel(self._settings, parent=page)
+        layout.addWidget(self._settings_panel, stretch=1)
+        row = QHBoxLayout()
+        self._settings_save = QPushButton("Save settings")
+        self._settings_save.setObjectName("runButton")
+        row.addStretch(1)
+        row.addWidget(self._settings_save)
+        layout.addLayout(row)
+        self._settings_save.clicked.connect(self._on_settings_save)
         return page
 
     def _wire(self) -> None:
         self._run_button.clicked.connect(self._emit_run)
         self._stop_button.clicked.connect(self.stop_requested)
         self._voice_button.clicked.connect(self.voice_requested)
+        self._voice_button.pressed.connect(self.voice_ptt_started)
+        self._voice_button.released.connect(self.voice_ptt_ended)
         self._command_input.returnPressed.connect(self._emit_run)
         self._nav_group.idClicked.connect(self._on_nav_clicked)
-        self._settings_button.clicked.connect(self.settings_requested)
+        self._chat_page.run_requested.connect(self.run_requested)
 
     # ------------------------------------------------------------- signals
 
@@ -173,14 +230,60 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(index)
         self.page_changed.emit(index)
 
+    @Slot()
+    def _on_settings_save(self) -> None:
+        if self._settings is not None:
+            self._settings_panel.apply()
+            self.settings_saved.emit()
+            self.show_notice("Settings saved.")
+
     # ----------------------------------------------------------- interface
 
     @property
     def learn_page(self) -> LearnPage:
         return self._learn_page
 
+    @property
+    def chat_page(self) -> ChatPage:
+        return self._chat_page
+
+    @property
+    def workflow_page(self) -> WorkflowPage:
+        return self._workflow_page
+
+    @property
+    def history_page(self) -> HistoryPage:
+        return self._history_page
+
+    @property
+    def settings_panel(self) -> SettingsPanel | None:
+        return getattr(self, "_settings_panel", None)
+
+    def show_page(self, index: int) -> None:
+        self._stack.setCurrentIndex(index)
+        self._nav_buttons[index].setChecked(True)
+        self.page_changed.emit(index)
+
+    def show_settings_page(self) -> None:
+        self.show_page(self.PAGE_SETTINGS)
+
+    def show_learn_page(self) -> None:
+        self.show_page(self.PAGE_LEARN)
+
     def command(self) -> str:
         return self._command_input.text()
+
+    def set_command_text(self, text: str) -> None:
+        """Voice transcripts land here for editing before execution."""
+        self._command_input.setText(text)
+        self._command_input.setFocus()
+
+    def set_provider_status(self, text: str) -> None:
+        self._provider_label.setText(text)
+        self._chat_page.set_provider(text)
+
+    def set_task_status(self, text: str) -> None:
+        self._task_status.setText(text)
 
     def set_state(self, state: TaskState) -> None:
         self._status.set_state(state)
@@ -191,6 +294,9 @@ class MainWindow(QMainWindow):
     def show_notice(self, text: str) -> None:
         self._hint.show_temporary(text)
 
+    def set_close_to_tray(self, enabled: bool) -> None:
+        self._close_to_tray = enabled
+
     def minimize(self) -> None:
         self.showMinimized()
 
@@ -199,8 +305,11 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def force_quit(self) -> None:
+        QGuiApplication.instance().quit()
+
     def save_geometry(self) -> None:
-        self._settings.setValue("main/geometry", self.saveGeometry())
+        self._qsettings.setValue("main/geometry", self.saveGeometry())
 
     # ------------------------------------------------------------- window
 
@@ -209,18 +318,22 @@ class MainWindow(QMainWindow):
         if not self._positioned:
             self._positioned = True
             screen = self.screen() or QGuiApplication.primaryScreen()
-            if screen is not None and not self._settings.contains("main/geometry"):
+            if screen is not None and not self._qsettings.contains("main/geometry"):
                 frame = self.frameGeometry()
                 frame.moveCenter(screen.availableGeometry().center())
                 self.move(frame.topLeft())
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt naming)
         self.save_geometry()
-        # Closing the main window ends the session even if the popup is open.
-        QGuiApplication.instance().quit()
-        event.accept()
+        if self._close_to_tray:
+            event.ignore()
+            self.hide()
+            self.hidden_to_tray.emit()
+        else:
+            self.force_quit()
+            event.accept()
 
     def _restore_geometry(self) -> None:
-        geometry = self._settings.value("main/geometry")
+        geometry = self._qsettings.value("main/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)

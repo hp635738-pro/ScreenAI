@@ -23,7 +23,13 @@ from core.settings import SettingsStore
 from core.task_manager import TaskManager
 from core.terminal import TerminalEngine
 from core.vision import VisionEngine, VisionError
-from core.voice_service import VoiceService
+from core.capabilities import CapabilityProbe
+from core.config import Config
+from core.diagnostics import build_report as build_diagnostics_report
+from core.diagnostics import export_report as export_diagnostics_report
+from core.history import HistoryService
+from core.plugins import PluginRegistry
+from core.voice import VoiceInputService, available_providers
 from core.workflow_player import StepPlaybackResult, WorkflowPlayer
 from database.action_repository import ActionRepository
 from database.db_manager import DatabaseManager
@@ -36,7 +42,8 @@ from ui.popup import ExecutionPopup
 class ApplicationController(QObject):
     def __init__(self) -> None:
         super().__init__()
-        self._window = MainWindow()
+        self._settings = SettingsStore()
+        self._window = MainWindow(self._settings)
         self._popup = ExecutionPopup()
         self._launcher = AppLauncher()
         self._parser = IntentParser(
@@ -48,7 +55,10 @@ class ApplicationController(QObject):
             self, launcher=self._launcher, automation=self._automation
         )
         self._tasks = TaskManager(self)  # Milestone 1 simulation engine
-        self._voice = VoiceService(self)
+        self._voice = VoiceInputService(parent=self)
+        for _voice_provider in available_providers():
+            self._voice.register_provider(_voice_provider)
+        self._voice.set_provider(str(self._settings.get("voice_provider")))
         self._vision = VisionEngine(self)
         self._ocr = OcrEngine(vision=self._vision)
         self._recorder = WorkflowRecorder(self, target_resolver=self._click_target)
@@ -59,7 +69,6 @@ class ApplicationController(QObject):
         self._repository = TaskRepository(self._db)
         self._action_repository = ActionRepository(self._db)
         self._workflow_repository = WorkflowRepository(self._db)
-        self._settings = SettingsStore()
         self._safety = SafetyManager(
             confirm_policy=str(self._settings.get("confirm_policy"))
         )
@@ -83,7 +92,15 @@ class ApplicationController(QObject):
         self._run_started = 0.0
         self._simulate_run = False
 
+        self._history = HistoryService(self._db)
+        self._plugins = PluginRegistry()
+        self._plugins.load_directory(Config.data_dir() / "plugins")
+        self._probe = CapabilityProbe()
+        self._agent._tool_hook = self._register_plugin_tools
+        self._tray = None
+        self._setup_tray()
         self._wire()
+        self._apply_settings()
         self._reload_workflows()
 
     # ------------------------------------------------------------- wiring
@@ -92,9 +109,12 @@ class ApplicationController(QObject):
         window = self._window
         window.run_requested.connect(self._on_run_requested)
         window.stop_requested.connect(self._on_stop_requested)
-        window.voice_requested.connect(self._voice.start_listening)
+        window.voice_ptt_started.connect(self._voice.begin_push_to_talk)
+        window.voice_ptt_ended.connect(self._voice.end_push_to_talk)
         window.page_changed.connect(self._on_page_changed)
         self._voice.notice.connect(window.show_notice)
+        self._voice.error.connect(window.show_notice)
+        self._voice.transcription_ready.connect(window.set_command_text)
 
         popup = self._popup
         popup.pause_requested.connect(self._on_pause_requested)
@@ -139,6 +159,19 @@ class ApplicationController(QObject):
 
         popup.confirmation_responded.connect(self._agent.respond_to_confirmation)
         window.settings_requested.connect(self._on_settings_requested)
+        window.settings_saved.connect(self._on_settings_saved)
+        window.hidden_to_tray.connect(self._on_hidden_to_tray)
+
+        workflow_page = window.workflow_page
+        workflow_page.search_changed.connect(self._on_workflow_search)
+        workflow_page.run_requested.connect(self._on_play_workflow)
+        workflow_page.rename_requested.connect(self._on_workflow_rename)
+        workflow_page.delete_requested.connect(self._on_workflow_delete)
+        workflow_page.learn_requested.connect(window.show_learn_page)
+
+        history_page = window.history_page
+        history_page.filter_requested.connect(self._on_history_filter)
+        history_page.clear_requested.connect(self._on_history_clear)
 
         agent = self._agent
         agent.started.connect(self._on_agent_started)
@@ -149,15 +182,23 @@ class ApplicationController(QObject):
         agent.tool_finished.connect(self._on_agent_tool_finished)
         agent.finished.connect(self._on_agent_finished)
         agent.notice.connect(self._on_task_notice)
+        agent.paused.connect(self._on_agent_paused_changed)
 
     # ---------------------------------------------------------- lifecycle
 
     def start(self) -> None:
         self._window.set_state(TaskState.IDLE)
+        self._apply_settings()
+        self._reload_workflows()
+        self._on_history_filter("", "all")
+        if self._tray is not None:
+            self._tray.show()
         self._window.show()
 
     def shutdown(self) -> None:
         self._window.save_geometry()
+        if self._tray is not None:
+            self._tray.hide()
         self._agent.cancel()
         self._recorder.stop()
         self._player.shutdown()
@@ -239,6 +280,8 @@ class ApplicationController(QObject):
     @Slot()
     def _on_stop_requested(self) -> None:
         """Global emergency stop: cancels whatever is executing."""
+        self._automation.abort()
+        self._terminal.cancel()
         stopped = False
         if self._executor.is_running:
             self._executor.emergency_stop()
@@ -260,9 +303,13 @@ class ApplicationController(QObject):
 
     @Slot()
     def _on_pause_requested(self) -> None:
-        message = "Pause is a UI placeholder in this milestone."
-        self._popup.show_notice(message)
-        self._window.show_notice(message)
+        if self._agent.is_running:
+            if self._agent.is_paused:
+                self._agent.resume()
+            else:
+                self._agent.pause()
+            return
+        self._window.show_notice("No running task to pause.")
 
     @Slot()
     def _on_restore_requested(self) -> None:
@@ -521,7 +568,12 @@ class ApplicationController(QObject):
         from ui.settings_dialog import SettingsDialog
 
         dialog = SettingsDialog(
-            self._settings, self._safety, parent=self._window
+            self._settings,
+            self._safety,
+            parent=self._window,
+            voice_providers=self._voice.provider_names(),
+            on_clear_history=self._clear_agent_history,
+            on_export_diagnostics=self._export_diagnostics,
         )
         dialog.exec()
 
@@ -529,7 +581,7 @@ class ApplicationController(QObject):
 
     @Slot(int)
     def _on_page_changed(self, index: int) -> None:
-        if index == 1:  # Learn page
+        if index == MainWindow.PAGE_LEARN:
             try:
                 self._window.learn_page.set_monitor_options(self._vision.list_monitors())
             except VisionError as exc:
@@ -538,6 +590,10 @@ class ApplicationController(QObject):
             self._vision.start_stream(mode=mode, monitor=monitor)
         else:
             self._vision.stop_stream()
+        if index == MainWindow.PAGE_WORKFLOWS:
+            self._reload_workflows()
+        elif index == MainWindow.PAGE_HISTORY:
+            self._on_history_filter("", "all")
 
     @Slot(str, int)
     def _on_capture_mode_changed(self, mode: str, monitor: int) -> None:
@@ -573,7 +629,143 @@ class ApplicationController(QObject):
         return best
 
     def _reload_workflows(self) -> None:
-        self._window.learn_page.set_workflows(self._workflow_repository.list_workflows())
+        summaries = self._workflow_repository.list_workflows()
+        self._window.learn_page.set_workflows(summaries)
+        self._window.workflow_page.set_workflows(summaries)
+
+    # ----------------------------------------------------- M5 integrations
+
+    def maybe_first_run(self) -> None:
+        """Show the setup wizard on first launch (never called by tests)."""
+        if bool(self._settings.get("first_run_done")):
+            return
+        from ui.wizard import FirstRunWizard  # noqa: PLC0415
+
+        wizard = FirstRunWizard(self._settings, self._safety, parent=self._window)
+        wizard.exec()
+        self._apply_settings()
+
+    def _apply_settings(self) -> None:
+        values = self._settings.all()
+        self._automation.configure(
+            typing_speed_ms=int(values["typing_speed_ms"]),
+            action_delay_ms=int(values["action_delay_ms"]),
+        )
+        self._window.set_close_to_tray(bool(values["close_to_tray"]))
+        self._safety.configure(confirm_policy=str(values["confirm_policy"]))
+        self._voice.set_provider(str(values["voice_provider"]))
+        self._refresh_provider_status()
+
+    def _refresh_provider_status(self) -> None:
+        values = self._settings.all()
+        model = (
+            values["model_openai"]
+            if values["provider"] == "openai"
+            else values["model_ollama"]
+        )
+        self._window.set_provider_status(f"Provider: {values['provider']} \u00b7 {model}")
+
+    def _on_settings_saved(self) -> None:
+        self._apply_settings()
+        self._window.show_notice("Settings saved.")
+
+    def _on_hidden_to_tray(self) -> None:
+        if self._tray is not None:
+            self._tray.show()
+            self._tray.notify(
+                "ScreenAI",
+                "Still running in the tray \u2014 use the menu to restore or quit.",
+            )
+
+    def _on_agent_paused_changed(self, paused: bool) -> None:
+        self._popup.set_paused(paused)
+        if self._tray is not None:
+            self._tray.set_paused(paused)
+
+    def _setup_tray(self) -> None:
+        from ui.tray import AppTray  # noqa: PLC0415
+
+        self._tray = AppTray(self._window)
+        self._tray.action_show.triggered.connect(self._on_tray_show)
+        self._tray.action_pause.triggered.connect(self._on_pause_requested)
+        self._tray.action_stop.triggered.connect(self._on_stop_requested)
+        self._tray.action_settings.triggered.connect(self._on_settings_requested)
+        self._tray.action_quit.triggered.connect(self._on_tray_quit)
+
+    def _on_tray_show(self) -> None:
+        self._window.restore()
+
+    def _on_tray_quit(self) -> None:
+        self._window.force_quit()
+
+    def _on_workflow_search(self, search: str) -> None:
+        self._window.workflow_page.set_workflows(
+            self._workflow_repository.list_workflows(search)
+        )
+
+    def _on_workflow_rename(
+        self, workflow_id: int, app_name: str, task_name: str
+    ) -> None:
+        if not app_name or not task_name:
+            self._window.show_notice("Application and workflow name are required.")
+            return
+        if self._workflow_repository.rename_workflow(workflow_id, app_name, task_name):
+            self._reload_workflows()
+            self._window.show_notice("Workflow renamed.")
+        else:
+            self._window.show_notice("Could not rename that workflow.")
+
+    def _on_workflow_delete(self, workflow_id: int) -> None:
+        if self._workflow_repository.delete_workflow(workflow_id):
+            self._reload_workflows()
+            self._window.show_notice("Workflow deleted.")
+        else:
+            self._window.show_notice("Could not delete that workflow.")
+
+    def _on_history_filter(self, search: str, status: str) -> None:
+        self._window.history_page.set_entries(self._history.entries(search, status))
+
+    def _on_history_clear(self) -> None:
+        self._history.clear()
+        self._on_history_filter("", "all")
+        self._window.show_notice("History cleared.")
+
+    def _clear_agent_history(self) -> None:
+        from database.agent_repository import AgentRepository  # noqa: PLC0415
+
+        AgentRepository(self._db).clear_all()
+        self._window.show_notice("Agent history cleared.")
+
+    def _export_diagnostics(self) -> None:
+        from pathlib import Path  # noqa: PLC0415
+
+        from PySide6.QtWidgets import QFileDialog  # noqa: PLC0415
+
+        path_str, _chosen = QFileDialog.getSaveFileName(
+            self._window,
+            "Export diagnostic report",
+            "screenai-diagnostics.txt",
+            "Text files (*.txt)",
+        )
+        if not path_str:
+            return
+        values = self._settings.all()
+        text = build_diagnostics_report(
+            provider=str(values["provider"]),
+            privacy=str(values["privacy"]),
+            confirm_policy=str(values["confirm_policy"]),
+            api_key_configured=bool(self._settings.masked_api_key()),
+            capabilities=self._probe.detect(),
+            error_categories=self._history.recent_error_categories(),
+            plugin_errors=self._plugins.load_errors,
+            ollama_host=str(values["ollama_host"]),
+        )
+        export_diagnostics_report(Path(path_str), text)
+        self._window.show_notice("Diagnostic report exported (contains no secrets).")
+
+    def _register_plugin_tools(self, registry) -> None:  # noqa: ANN001
+        for tool in self._plugins.tool_specs:
+            registry.register(tool)
 
     def _record_simulate_action(self, success: bool) -> None:
         if self._simulate_run:

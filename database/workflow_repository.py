@@ -44,11 +44,15 @@ class WorkflowRepository:
             workflow_id, app_name, task_name, row["created_at"], list(steps)
         )
 
-    def list_workflows(self) -> list[WorkflowSummary]:
+    def list_workflows(self, search: str = "") -> list[WorkflowSummary]:
+        pattern = f"%{search.lower()}%"
         rows = self._db.connect().execute(
             "SELECT w.id, w.app_name, w.task_name, w.created_at, "
             "(SELECT COUNT(*) FROM workflow_steps s WHERE s.workflow_id = w.id) AS step_count "
-            "FROM workflows w ORDER BY w.id DESC"
+            "FROM workflows w "
+            "WHERE LOWER(w.app_name) LIKE ? OR LOWER(w.task_name) LIKE ? "
+            "ORDER BY w.id DESC",
+            (pattern, pattern),
         ).fetchall()
         return [
             WorkflowSummary(
@@ -76,6 +80,15 @@ class WorkflowRepository:
         ).fetchall()
         steps = [self._to_step(item) for item in step_rows]
         return Workflow(row["id"], row["app_name"], row["task_name"], row["created_at"], steps)
+
+    def rename_workflow(self, workflow_id: int, app_name: str, task_name: str) -> bool:
+        connection = self._db.connect()
+        cursor = connection.execute(
+            "UPDATE workflows SET app_name = ?, task_name = ? WHERE id = ?",
+            (app_name.strip(), task_name.strip(), workflow_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
 
     def delete_workflow(self, workflow_id: int) -> None:
         connection = self._db.connect()

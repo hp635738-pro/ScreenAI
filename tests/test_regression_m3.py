@@ -1,9 +1,6 @@
-"""Milestone 1–3 regression: legacy behaviour stays intact."""
-
-from __future__ import annotations
-
 import importlib
 
+from core.controller import ApplicationController
 
 def test_all_m1_m3_modules_import():
     for name in (
@@ -12,6 +9,21 @@ def test_all_m1_m3_modules_import():
         "core.task_manager",
         "core.task_worker",
         "core.voice_service",
+    "core.voice",
+    "core.voice.service",
+    "core.plugins",
+    "core.plugins.registry",
+    "core.history",
+    "core.diagnostics",
+    "core.capabilities",
+    "core.logging_setup",
+    "core.version",
+    "ui.chat_page",
+    "ui.workflow_page",
+    "ui.history_page",
+    "ui.tray",
+    "ui.wizard",
+    "ui.settings_panel",
         "core.app_launcher",
         "core.intent_parser",
         "core.terminal",
@@ -116,7 +128,7 @@ def test_popup_m3_displays_intact(qapp):
     popup.begin_playback("App: Task", 9)
     assert popup._task_label.text() == "Playing…"
     popup.update_playback(6, 9, "Found Export")
-    assert popup._step_label.text() == "Step 6/9"
+    assert popup._step_label.text() == "Step 6 / 9"
     assert popup._progress_label.text() == "Found Export"
 
 
@@ -142,17 +154,16 @@ def test_automation_key_aliases_m2():
     assert ("press", "enter") in backend.calls
 
 
-def test_pause_still_placeholder(qapp):
-    from core.controller import ApplicationController
-    from tests.fakes import FakeBackend, FakeReader, FakeSct
-
+def test_pause_idle_notice_and_toggle(qapp):
+    """Milestone 5: pause is real — with no running task it reports clearly."""
     controller = ApplicationController()
-    controller._automation._backend = FakeBackend()
-    controller._vision._sct_factory = FakeSct
-    controller._vision._window_geometry_fn = lambda: (0, 0, 8, 6)
-    controller._ocr._reader = FakeReader()
-    notices: list[str] = []
-    controller._window.show_notice = notices.append  # capture
-    controller._on_pause_requested()
-    assert any("placeholder" in n for n in notices)
-    controller.shutdown()
+    try:
+        notices = []
+        controller._window.show_notice = notices.append
+        controller._on_pause_requested()
+        assert any("No running task to pause" in n for n in notices)
+        assert controller._agent.is_paused is False
+    finally:
+        controller.shutdown()
+
+

@@ -39,14 +39,39 @@ CONFIRM_NEVER = "never"
 CONFIRM_OPTIONS = (CONFIRM_ALWAYS, CONFIRM_REQUIRED, CONFIRM_NEVER)
 
 DEFAULTS: dict[str, object] = {
+    # AI
     "provider": PROVIDER_AUTO,
     "model_openai": "gpt-4o-mini",
     "model_ollama": "llama3.2",
     "ollama_host": "http://localhost:11434",
     "privacy": PRIVACY_ASK_BEFORE_CLOUD,
-    "confirm_policy": CONFIRM_REQUIRED,
+    # Automation
+    "automation_backend": "auto",  # auto | pyautogui | xdotool
+    "typing_speed_ms": 24,
+    "action_delay_ms": 80,
+    # Vision
+    "ocr_enabled": True,
+    "screenshot_interval_ms": 1000,
+    "active_window_only": False,
     "screenshot_history": False,
+    # Voice
+    "voice_provider": "none",  # none | whisper (extensible)
+    "voice_microphone": "default",
+    "push_to_talk": True,
+    # Interface
+    "theme": "dark",
+    "close_to_tray": True,
+    "popup_behavior": "auto",  # auto | quiet | off
+    # Security
+    "confirm_policy": CONFIRM_REQUIRED,
+    # Setup
+    "first_run_done": False,
 }
+
+# Interface / automation option ids (labels live in the UI layer).
+POPUP_OPTIONS = ("auto", "quiet", "off")
+VOICE_PROVIDER_OPTIONS = ("none", "whisper")
+AUTOMATION_BACKEND_OPTIONS = ("auto", "pyautogui", "xdotool")
 
 ENV_PROVIDER = "SCREENAI_AI_PROVIDER"
 ENV_PRIVACY = "SCREENAI_AI_PRIVACY"

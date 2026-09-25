@@ -83,3 +83,19 @@ class AgentRepository:
                 "SELECT * FROM agent_sessions ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def error_categories(self, limit: int = 20) -> list[str]:
+        rows = self._db.connect().execute(
+            "SELECT error_category, COUNT(*) AS n FROM agent_events "
+            "WHERE error_category IS NOT NULL "
+            "GROUP BY error_category ORDER BY n DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [f"{row['error_category']} x{row['n']}" for row in rows]
+
+    def clear_all(self) -> int:
+        connection = self._db.connect()
+        total = connection.execute("DELETE FROM agent_events").rowcount
+        total += connection.execute("DELETE FROM agent_sessions").rowcount
+        connection.commit()
+        return total

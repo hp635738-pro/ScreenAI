@@ -11,11 +11,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 
+from core.version import APP_NAME, ORG_NAME, VERSION
+
 
 class Config:
-    APP_NAME = "ScreenAI"
-    ORG_NAME = "ScreenAI"
-    VERSION = "0.1.0"
+    APP_NAME = APP_NAME
+    ORG_NAME = ORG_NAME
+    VERSION = VERSION
 
     # Duration of the simulated execution used in Milestone 1 (no AI yet).
     TASK_SIM_DURATION = 5.0

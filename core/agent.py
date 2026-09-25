@@ -90,6 +90,7 @@ class Agent:
         confirm_cb: Callable[[str], bool] | None = None,
         event_cb: Callable[[AgentEvent], None] | None = None,
         cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
         max_steps: int = 12,
         tool_fail_limit: int = 3,
     ) -> None:
@@ -102,6 +103,7 @@ class Agent:
         self._confirm_cb = confirm_cb
         self._event_cb = event_cb or (lambda event: None)
         self._cancel = cancel_event or threading.Event()
+        self._pause = pause_event or threading.Event()
         self._max_steps = max_steps
         self._tool_fail_limit = tool_fail_limit
         self._failures: dict[str, int] = {}
@@ -129,6 +131,11 @@ class Agent:
                 if self._cancel.is_set():
                     result = self._cancelled_result(steps, provider_name)
                     break
+                if self._pause.is_set():
+                    # Pause: finish the current step, start nothing new.
+                    self._status_cb("Paused")
+                    self._wait_while_paused()
+                    continue
                 try:
                     response = self._chat(messages)
                     provider_name = response.provider or provider_name
@@ -248,6 +255,13 @@ class Agent:
                 )
                 self._memory.finish_session(session_id, status)
         return result
+
+    def _wait_while_paused(self) -> None:
+        """Block until resumed or stopped (stop wins)."""
+        while self._pause.is_set() and not self._cancel.is_set():
+            self._cancel.wait(0.05)
+        if not self._cancel.is_set():
+            self._status_cb("Resuming")
 
     # ------------------------------------------------------- single call
 

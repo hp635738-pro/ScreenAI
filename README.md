@@ -1,192 +1,396 @@
-# ScreenAI
+# ScreenAI 1.0.0
 
-Dark, modern Linux desktop assistant and **control engine** for Kubuntu (Qt/KDE).
+**ScreenAI** is a personal desktop assistant for **Kubuntu / KDE on X11**. You type (or speak) a
+command — "open Firefox", "run ls -la", "press Ctrl+S" — and ScreenAI turns it into safe, tool-based
+actions on your desktop: launching applications, running terminal commands, driving mouse/keyboard
+automation, reading the screen with OCR, and executing recorded multi-step workflows. An optional
+OpenAI/Ollama agent plans complex tasks through a strict tool registry — never by generating code.
 
-**Milestone 4** turns ScreenAI into an AI desktop agent: natural-language requests go to an LLM (OpenAI or local Ollama), which plans step by step using **registered tools** only — launching apps, safe terminal commands, mouse/keyboard automation, screen understanding (Milestone 3 vision/OCR) and saved workflows — while a safety manager classifies every action and pauses for your confirmation on consequential operations. The Milestone 1–3 layers (local command parser, learn mode, popup) are preserved.
+> **Status:** v1.0.0 (Milestones 1–5 complete). Personal-use software; review the
+> [Safety model](#11-safety-model) before enabling cloud AI.
 
-## Features
+---
 
-### Milestone 1 — framework and floating popup
-- Dark modern UI (Fusion + custom QSS theme in `assets/qss/dark.qss`)
-- Main window with command input, **Run**, **Voice** (placeholder), live status indicator
-- On **Run**: the main window minimizes and a frameless always-on-top **execution popup** appears (draggable, `×`/`Esc` to dismiss)
-- **Restore** reopens the main window; nothing ever blocks the GUI thread
-- Provider framework ready for OpenAI and Ollama (`core/providers/`)
+## Contents
 
-### Milestone 2 — control engine
-- **Application launcher** (`core/app_launcher.py`) — natural aliases (`firefox`, `chrome`, `brave`, `vscode`, `konsole`, `dolphin`, `settings`, `terminal`, `files`, `kate`) resolved on `PATH` at runtime and launched with `subprocess.Popen` (no shell)
-- **Terminal engine** (`core/terminal.py`) — `execute(command)` with streamed stdout/stderr via Qt signals, full capture, exit code; explicit `sh -c` only for pipelines/redirections; runs off the GUI thread
-- **Automation layer** (`core/automation.py`) — mouse move, left/right click, double click, typing, hotkeys — `pyautogui` primary, `xdotool` fallback
-- **Intent parser** (`core/intent_parser.py`) — lightweight local (no AI) command→action parsing with multi-step chains
-- **Popup step progress** — `Working… / Step 1/3 / Opening Firefox` updated live through signals, plus streamed terminal output line
-- **Action history** — every executed step stored in SQLite (`timestamp`, `command`, `action`, `success`, `duration`) alongside the run history
-- **Emergency stop** — global **Stop** (main window *and* popup) immediately and safely cancels running automation: typing aborts between chunks, terminal process groups get SIGTERM→SIGKILL, remaining steps are skipped
+1. [What ScreenAI does](#1-what-screenai-does)
+2. [Architecture overview](#2-architecture-overview)
+3. [Installation](#3-installation)
+4. [First-run setup](#4-first-run-setup)
+5. [OpenAI setup](#5-openai-setup)
+6. [Ollama setup](#6-ollama-setup)
+7. [Voice setup](#7-voice-setup)
+8. [X11 / Wayland limitations](#8-x11--wayland-limitations)
+9. [Learn Mode](#9-learn-mode)
+10. [Workflow usage](#10-workflow-usage)
+11. [Safety model](#11-safety-model)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Development instructions](#13-development-instructions)
+14. [Adding a new tool](#14-adding-a-new-tool)
+15. [Adding a new provider](#15-adding-a-new-provider)
+16. [Adding a new plugin](#16-adding-a-new-plugin)
+17. [Experimental features](#17-experimental-features)
 
-### Milestone 3 — vision and learn mode
-- **Vision engine** (`core/vision.py`) — continuous desktop capture with `mss` + Pillow refreshed every 300–500 ms; per-monitor and active-window-only modes; every frame is delivered as **both QImage and PIL image** through queued signals
-- **OCR engine** (`core/ocr.py`) — EasyOCR text detection (`detect_text(image)`, `find_text("Export")`) returning bounding boxes and confidences; fully offline once models are cached
-- **Learn Mode recorder** (`core/learn_mode.py`) — records mouse clicks, keyboard shortcuts, typed text (coalesced into sentences), window title and timestamps while you demonstrate a task; clicks are labeled with the OCR text near the cursor (`Click File`) and double-clicks are merged automatically
-- **Workflow storage** — SQLite tables `workflows` (app_name, task_name, created_at) and `workflow_steps` (action, target_text, coordinates, delay, metadata JSON)
-- **Workflow player** (`core/workflow_player.py`) — replays saved workflows on a worker thread; clicks prefer OCR text (`Found Export`) and fall back to saved coordinates; each step is retried twice before failing; live progress (`Playing… / Found Export / Step 6/9`)
-- **Learn page** — `Start Recording`, `Stop`, `Save Workflow` with App Name / Task Name fields, live screen preview with capture-mode picker, and a saved-workflow list (double-click to play)
+---
 
-### Milestone 4 — AI brain
-- **Real providers** (`core/providers/`) — `OpenAIProvider` (chat completions, streaming, timeouts; key from settings/env — never logged or stored in SQLite) and `OllamaProvider` (local host, configurable model, live model list, clear "not available" errors). `Auto` prefers local Ollama and only touches OpenAI after the privacy gate — never silently.
-- **Agent core** (`core/agent.py`) — bounded tool-using loop: request → LLM → tool call → observation → LLM → … → done. The LLM can only request registered tools; generated code is never executed.
-- **Tool registry** (`core/tools/`) — 16 tools with name, description, JSON input schema, `execute()` and safety level: `open_application`/`close_application`, `run_terminal_command`, `mouse_move`/`mouse_click`/`type_text`/`press_key`/`hotkey`, `screenshot`/`find_text`/`inspect_screen`, `start_learning`/`stop_learning`/`save_workflow`/`list_workflows`/`run_workflow`.
-- **Safety system** (`core/safety.py`) — SAFE / CONFIRM / BLOCKED classification for tools *and* terminal commands (`TerminalTool → SafetyManager → TerminalEngine`). Purchases, orders, messages and form submissions **always** ask, whatever the policy. Secrets are redacted before anything reaches logs, memory or the LLM.
-- **Vision + workflows for the agent** — `find_text("Export")` returns screen-space bboxes/click centres (OCR-first, no fixed coordinates); `run_workflow("XYZ App", "Export PDF")` replays saved workflows, and falls back to vision + automation when none exists. Learning stays an explicit, user-controlled mode.
-- **Agent memory + logs** (`core/memory.py`, SQLite) — sessions, tool calls, results, timestamps, task status; `agent_log` view exposes task/provider/tool/timing/success/error-category. Screenshots are stored only with explicit screenshot-history opt-in.
-- **Confirmation UI** — the popup shows `ScreenAI / Understanding request… / Opening Firefox / Inspecting screen / Found Export / Waiting for confirmation / Task completed` with **[Confirm] [Cancel]** (declining ends the task — no sneaky retries). **Stop** cancels the agent and any running automation; **Pause** and **Voice** remain placeholders.
-- **Error recovery** — application not found, Ollama/API unavailable, OCR failure, target not found, automation failure, timeout and user cancellation all become observations: try a safe alternative, bounded retries (same tool fails 3× → stop, hard step cap), ask the user when needed. With no AI configured the Milestone 2 local parser still runs.
+## 1. What ScreenAI does
 
-## Command examples
+- **Command interface** on every page: text input, microphone (push-to-talk) button, current AI
+  provider/model, and live task status.
+- **Local command parsing** — no AI needed for common tasks: open apps, run terminal commands,
+  press keys/hotkeys, type text, scroll, screenshot. Works fully offline.
+- **[AI agent](#5-openai-setup) (OpenAI or Ollama)** — plans multi-step tasks by calling registered
+  tools (screenshot, OCR, app list, file listing, terminal …) in a bounded loop.
+- **Desktop automation** with graceful failure if `pyautogui`/X11 is unavailable.
+- **Vision & OCR** — screen capture and text recognition ([experimental](#17-experimental-features)).
+- **Learn Mode** — record your actions once, replay them as a workflow later.
+- **Workflow Manager** — run, rename, search and delete saved workflows.
+- **History** — every task with provider, duration and result; searchable and clearable.
+- **System tray** — close-to-tray, pause/resume, stop current task, settings, quit.
+- **Execution popup** — live task/step status with Pause, Stop, Restore and confirmation prompts.
+- **Safety manager** — confirm-before-run for consequential actions, blocked destructive classes,
+  an emergency Stop, and privacy modes (Local only / Allow cloud AI / Ask before cloud AI).
+- **Voice input** — push-to-talk transcription ([experimental](#17-experimental-features)).
+- **Plugins** — internal extension points for tools, commands, settings and UI pages.
 
-| Say | Do |
-| --- | --- |
-| `open firefox` / `launch vscode` / `open terminal` | Launch an installed app (aliases resolve to real executables) |
-| `run ls -la` / `run in terminal echo hi` | Execute in the terminal engine (streamed, captured) |
-| `type hello world` | Type text (quote it to include `then`/`;`) |
-| `press ctrl+c` / `hotkey ctrl shift t` | Press hotkeys / single keys (`enter`, `tab`, …) |
-| `move mouse to 100 200` | Move the mouse |
-| `click at 300 400` / `right click` / `double click at 10 20` | Click |
-| `wait 2s` | Pause between steps |
-| `open firefox then type hello world` | Chain steps (`then`, `and then`, `;`) |
-| `simulate writing a report` | Milestone 1 simulated run (no AI yet) |
+## 2. Architecture overview
 
-Anything unrecognized is rejected politely and logged to the action history. With an AI provider configured the same input (and richer requests like *"Open Konsole and run `pwd`"* or *"Open the application and export the current document"*) is handled by the agent instead.
+ScreenAI is deliberately modular — every subsystem is a small, swappable module with an interface:
 
-## AI Engine settings
+```
+core/
+  version.py            # single source of truth: APP_NAME, VERSION ("1.0.0")
+  config.py             # runtime-resolved paths & settings schema (no hardcoded paths)
+  settings.py           # persistent settings (secrets kept out of logs)
+  logging_setup.py      # central logging with secret redaction
+  controller.py         # Application wiring (UI ⇄ services, signals/slots)
+  agent_controller.py   # async tool-using agent loop (provider-agnostic)
+  history.py            # task history service (redacted, searchable)
+  diagnostics.py        # diagnostic report builder/exporter (no secrets)
+  capabilities.py       # runtime capability probing (display/automation/OCR/voice/tray)
+  providers/            # AIProvider interface + OpenAI / Ollama / scripting / auto
+  agent/                # planner, tools loop, safety manager, confirmation queue
+  tools/                # Tool interface, ToolRegistry, 16 built-in tools, safety levels
+  automation/           # App/terminal control, mouse/keyboard, self-check
+  vision/               # screenshot capture + OCR backends
+  memory/               # SQLite workflow/session storage (no secrets)
+  workflows/            # recorder, player, discovery, intent composer
+  voice/                # VoiceProvider interface + push-to-talk service + backends
+  plugins/              # Plugin interface, registry, per-plugin ToolRegistry, context
+ui/
+  main_window.py        # six-page shell: Home, AI/Chat, Learn, Workflows, History, Settings
+  command_bar.py        # shared command input + mic + provider/model/status
+  tray.py               # system tray (Show / Pause Agent / Stop Current Task / Settings / Quit)
+  popup.py              # execution popup (task, step, status, Pause/Stop/Restore/Confirm)
+  wizard.py             # 5-step first-run wizard
+  settings_panel.py     # AI / Automation / Vision / Voice / Interface / Security pages
+  chat_page.py / learn_page.py / workflow_page.py / history_page.py …
+database/               # SQLite schema & repositories
+tests/                  # pytest suite (mocked providers; no real keys/Ollama needed)
+```
 
-The **Settings** button (main window) opens the AI Engine section:
+**Design rules** (enforced in review):
 
-| Option | Values |
-| --- | --- |
-| Provider | OpenAI · Local / Ollama · Auto (local first) |
-| Model | per-provider fields; the Ollama list can be fetched from the running instance |
-| Privacy | Local only · Allow cloud AI · Ask before cloud use |
-| OpenAI API key | password-style input, saved to `credentials.json` (0600) and never displayed in full again (`sk-…efgh`) |
+- UI never talks to backends directly — always through signals/slots and the `ApplicationController`.
+- The agent loop never touches the OS directly and **never executes LLM-generated Python** —
+  only registered `Tool`s (name, description, input schema, `execute()`, safety level).
+- Adding a tool, provider, page, or voice engine = add a module and register it; the agent loop,
+  UI shell and settings are never modified (see [14](#14-adding-a-new-tool),
+  [15](#15-adding-a-new-provider), [16](#16-adding-a-new-plugin)).
 
-Environment overrides: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `SCREENAI_AI_PROVIDER`, `SCREENAI_AI_PRIVACY`. Auto never switches to cloud AI silently: privacy is checked before any request leaves the machine.
+## 3. Installation
 
-## Learn Mode
+### From the `.deb` package (recommended)
 
-1. Open the **Learn** page and pick a capture mode (all monitors / active window / single monitor); the preview refreshes live.
-2. Fill **App Name** and **Task Name**, press **Start Recording**, then perform the task once (the main window minimizes; the popup shows `Recording… / Click File / Step 4`).
-3. Press **Stop**, review the recorded steps, then **Save Workflow**.
-4. Double-click a saved workflow (or select it and press **Play**) to replay it. Global **Stop** cancels playback or recording at any time.
+```bash
+./build_deb.sh                       # builds dist/screenai_1.0.0_all.deb
+sudo apt install ./dist/screenai_1.0.0_all.deb
+screenai                             # or the application menu entry "ScreenAI"
+```
 
+Uninstall cleanly:
 
-## Requirements
+```bash
+sudo apt remove --purge screenai
+```
 
-- Kubuntu (or any Qt/KDE Linux desktop). Automation needs X11 or XWayland (`pyautogui`/`xdotool` are X11-bound; Wayland-native input injection is a later milestone)
-- Python 3.12+
-- `PySide6`, `pyautogui`, `mss`, `Pillow`, `easyocr`, `pynput` (see `requirements.txt`), optional `xdotool` as automation fallback
-- **Offline by design** — OCR and learn/play run locally; no API keys and no OpenAI/Ollama calls in this milestone. EasyOCR + torch install from pip; the first OCR use caches models locally.
-- `pynput` may pull `evdev`, which needs `python3-dev` to build. In minimal environments install it with `pip install pynput --no-deps && pip install python-xlib six`.
+### Dependencies
 
-## Launch instructions
+- `python3` (≥ 3.12 on Kubuntu 24.04; the code also runs on 3.11)
+- `python3-pyside6.qtwidgets`, `python3-pyside6.qtsvg` (Qt UI)
+- `python3-pyautogui`, `python3-pil`, `python3-mss`, `python3-pynput` (automation/vision)
+- Recommended: `xdotool` (robust app launching on KDE), `xclip` (clipboard paste)
+- Optional (pip): `easyocr` (OCR), `faster-whisper` (voice) — see [17](#17-experimental-features)
 
 ### From source
 
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install PySide6 pytest pyflakes pyautogui pillow mss
+.venv/bin/python main.py
+```
+
+## 4. First-run setup
+
+On first launch (or via **Settings → Reset first-run wizard** — *experimental*) the wizard runs
+five steps:
+
+1. **Welcome** — what ScreenAI does and where your data lives (`~/.local/share/ScreenAI`).
+2. **Choose AI mode** — *Local (Ollama)*, *OpenAI*, or *Auto (prefer local)*.
+3. **Configure provider** — OpenAI: API key + model (stored 0600 in `credentials.json`, shown
+   masked, never logged). Ollama: host + model + **Connection test**.
+4. **Desktop automation check** — X11/Wayland session, mouse, keyboard, screenshot capture, OCR.
+   Unavailable pieces are disabled with a warning instead of crashing later.
+5. **Privacy** — *Local only* (default, safest) / *Allow cloud AI* / *Ask before cloud AI*.
+
+Everything the wizard writes lives in `settings.json` under the data dir and can be changed later
+in Settings.
+
+## 5. OpenAI setup
+
+1. Settings → **AI**: provider *OpenAI*, paste your API key (e.g. `sk-…`), pick a model
+   (e.g. `gpt-4o-mini`), Save.
+2. **Privacy mode** must allow cloud AI — in *Local only* mode OpenAI is never called, and in
+   *Ask before cloud AI* mode you are prompted first. There are **no silent provider switches**.
+3. The key is loaded from settings/environment only — never hardcoded, never written to logs,
+   SQLite, history, or the diagnostics export; never sent to the LLM (it is only used in the
+   HTTPS `Authorization` header). A 401 shows *"API key rejected or missing"* and a retry button.
+
+No API key? The scripting provider + local parsing handle the core commands without any AI.
+
+## 6. Ollama setup
+
+1. Install [Ollama](https://ollama.com) and pull a model: `ollama pull llama3.2`.
+2. Settings → **AI**: provider *Ollama*, host (default `http://localhost:11434`), model name,
+   **Test connection**.
+3. Ollama is **local** — it is used in every privacy mode and is preferred by *Auto* mode.
+4. If Ollama is down: clear error *"Ollama is not available at http://localhost:11434."* and
+   suggestions (start Ollama / switch provider). No crashes, no infinite retries.
+
+## 7. Voice setup
+
+1. Install a transcription engine ([experimental](#17-experimental-features)): `pip install faster-whisper`.
+2. Settings → **Voice**: provider (or *None (typed input only)*), microphone, and push-to-talk.
+3. Press the 🎤 button (hold for push-to-talk): the recording is transcribed and placed **into the
+   command box as editable text** — nothing executes until you press Run.
+4. Microphone errors (permission, device missing, engine missing) show a clear message; with
+   *None* selected or no engine installed, everything else in ScreenAI still works normally.
+
+New engines implement `core.voice.VoiceProvider` and register — see [15](#15-adding-a-new-provider).
+
+## 8. X11 / Wayland limitations
+
+| Capability | X11 (target) | Wayland |
+|---|---|---|
+| Screenshots (`mss`) | ✅ | ❌ usually blocked |
+| Mouse/keyboard control | ✅ | ❌ (`pyautogui` fails; GRAB_ERROR) |
+| Global emergency Stop (pynput) | ✅ | ⚠️ limited |
+| App launching / terminal | ✅ | ✅ (xdotool paths degrade) |
+| Typing via clipboard (`xdotool type` / `Ctrl+V`) | ✅ | ⚠️ needs portal-based clipboard |
+| OCR on captured frames | ✅ | ❌ (depends on screenshots) |
+
+ScreenAI **fails gracefully** on Wayland: the wizard's automation check reports each unavailable
+capability with a warning, and affected tools return actionable errors instead of crashing.
+**KDE on X11 is the supported target** (Kubuntu). On Wayland, app launching, terminal control,
+workflows that only use those, chat and history all still work.
+
+## 9. Learn Mode
+
+1. Open **Learn** in the sidebar (learning is **always explicit** — ScreenAI never records
+   normal interactions as workflows).
+2. Click **Record** and perform the actions: mouse moves/clicks, typing, key presses, app launches.
+3. **Stop** and name the workflow ("My report flow"). Steps are stored in SQLite with their delays.
+
+Learn Mode shows Recording/Playing/idle status with Stop always available.
+
+## 10. Workflow usage
+
+The **Workflows** page lists every saved workflow: application, workflow name, step count and
+creation date. You can **search**, **run**, **rename** and **delete** workflows, or jump back to
+Learn Mode. Running a workflow plays its steps in order with per-step status in the execution
+popup; **Stop** cancels playback mid-run. If a workflow's target application is missing, you get
+*"Workflow target app not found."* — the app never crashes.
+
+Workflows can also be executed by the agent through the `workflow_play` tool (subject to
+confirmation policy), and simple intents like "open Firefox" can be auto-composed from a natural
+command through the intent planner.
+
+## 11. Safety model
+
+- **Tool-only execution.** The LLM plans; only registered tools act. Arbitrary LLM-generated
+  Python is **never executed**; the prompt explicitly forbids code output and stray code is ignored.
+- **Safety levels** on every tool: `SAFE` (run), `CONFIRM` (ask first), `CONSEQUENTIAL` (ask first),
+  `BLOCKED` (refused). Terminal commands, file deletion, sending messages, purchases, form
+  submission and external-account actions require confirmation. Destructive disk operations,
+  credential extraction, disabling security and privilege escalation are blocked by policy.
+- **Confirmation policy** (Settings → Security): `required_only` (default) / `always` / `never`
+  / `blocked`. The confirmation prompt shows the exact command/action with **Confirm** and
+  **Cancel**; the agent pauses until you decide.
+- **Emergency Stop** (popup, tray, global shortcut) cancels the agent loop, automation, workflow
+  playback and cancellable terminal processes immediately.
+- **Pause / Resume** (popup + tray): pause stops starting new actions, lets the current safe
+  operation finish and preserves agent state; resume continues where it stopped.
+- **Privacy modes.** *Local only* (default): screenshots and commands never leave the machine.
+  *Allow cloud AI*: OpenAI may receive command text and screenshots as tool output. *Ask before
+  cloud AI*: prompted per session. No silent provider switches.
+- **Secrets.** API keys/tokens/passwords are never logged (a `redact()` filter backs this),
+  never stored in SQLite, never shown in full after save, and never included in diagnostics
+  exports or history. Stored credentials live in a 0600 `credentials.json` and can be wiped from
+  Settings → Security ("Clear stored credentials").
+- **Screenshots** are in-memory frames only; permanent screenshot history is off unless you
+  enable it explicitly (Settings → Vision).
+
+## 12. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| "API key rejected or missing" | Re-enter the key in Settings → AI; check the model name. |
+| "Ollama is not available…" | `ollama serve`; check host/port; press **Test connection**. |
+| "Screen capture failed…" | Use an X11 session; give no extra permissions — `mss` needs none on X11. |
+| "Screenshot / automation unavailable (Wayland?)` | See [§8](#8-x11--wayland-limitations); use X11. |
+| "OCR unavailable" | `pip install easyocr` (downloads a model on first use). |
+| "Application not found" | Install the app or use its exact desktop name; `xdotool` recommended. |
+| "Workflow target app not found." | The recorded app is missing; open it or edit the workflow. |
+| "Microphone permission denied" / no mic | System Settings → Audio → Input; or set Voice provider to None. |
+| "Voice provider unavailable" | `pip install faster-whisper`, or pick None — typing still works. |
+| Popup seems stuck | It never blocks input — use **Stop**; check History for the failure reason. |
+| Suspicion of a secret leak | Settings → Security → Clear stored credentials; `redact()` also strips `sk-…` keys from all logs and history. |
+
+Diagnostics: **Settings → Security → Export diagnostic report** writes a text file with version,
+Python/Qt/OS info, provider *type* (never secrets), capabilities and recent error categories —
+it contains **no API keys, passwords, tokens or cookies** (automated test: `tests/test_m5_diagnostics.py`).
+
+## 13. Development instructions
+
+```bash
+git clone https://github.com/hp635738-pro/ScreenAI.git
 cd ScreenAI
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
+.venv/bin/pip install PySide6==6.11.1 pytest pyflakes pyautogui pillow mss pynput
+
+# tests (mocked providers; no real API key or Ollama needed)
+.venv/bin/python -m pytest tests/ -q
+
+# lint + syntax gate
+.venv/bin/python -m pyflakes main.py core ui database tests examples
+.venv/bin/python -m compileall -q main.py core ui database tests examples
+
+# run
+.venv/bin/python main.py
 ```
 
-### As a .deb package
+- Architecture and design rules: [§2](#2-architecture-overview). Keep UI and business logic
+  separate; use signals/slots; resolve paths at runtime (`core.config.Config`).
+- Tests use fakes (`tests/fakes.py`): `ScriptedProvider`, `FakeBackend`, `FakeAudioRecorder` …
+- Milestone build notes: `docs/milestone2-plan.md` … `docs/milestone5-final-release-plan.md`.
 
-```bash
-cd ScreenAI
-./build_deb.sh
-sudo apt install ./dist/screenai_0.1.0_all.deb
-screenai
+## 14. Adding a new tool
+
+A tool is one class. The agent loop, registry and UI never change.
+
+```python
+from core.tools import Tool, ToolResult, ToolSpec
+from core.tools.safety import SafetyLevel
+
+class WeatherTool(Tool):
+    def __init__(self):
+        super().__init__()
+        self.spec = ToolSpec(
+            name="weather_lookup",              # unique name
+            description="Look up current weather for a city.",
+            input_schema={                       # JSON schema the LLM sees
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+            safety=SafetyLevel.SAFE,             # SAFE / CONFIRM / CONSEQUENTIAL / BLOCKED
+        )
+
+    def execute(self, arguments: dict) -> ToolResult:
+        return ToolResult(success=True, output="22°C, clear")
 ```
 
-The package installs app code to `/usr/lib/screenai`, a launcher at `/usr/bin/screenai`, a desktop entry and icon. Declared dependencies: `python3-pyside6.qtwidgets`, `python3-pyside6.qtsvg`, `python3-pyautogui`, `python3-pil`, `python3-mss`, `python3-pynput`; `xdotool` is recommended. `easyocr` is pip-only — install it in a venv (or `pip install easyocr`) for OCR/learn features. With pip-managed PySide6 install the .deb via `dpkg -i --force-depends` or adjust `build_deb.sh`.
+Register it — one line, nothing else:
 
-Environment variables:
-
-| Variable | Effect |
-| --- | --- |
-| `SCREENAI_DATA_DIR` | Override the data directory (database location). Defaults to `~/.local/share/ScreenAI` via `QStandardPaths`. |
-
-## Project structure
-
-```
-ScreenAI/
-├── main.py               # Entry point: QApplication bootstrap
-├── requirements.txt      # Runtime dependencies
-├── build_deb.sh          # .deb packaging script
-├── assets/
-│   ├── icons/            # App + button icons (SVG)
-│   └── qss/              # dark.qss — full application theme
-├── core/                 # Business logic (UI-free)
-│   ├── config.py         # App config + runtime path resolution
-│   ├── settings.py       # AI settings + secure credential storage
-│   ├── safety.py         # SAFE/CONFIRM/BLOCKED + secret redaction
-│   ├── agent.py          # Bounded LLM tool-loop (registered tools only)
-│   ├── agent_controller.py # UI ↔ agent layer: privacy gates, confirmations
-│   ├── memory.py         # Agent memory + structured agent log
-│   ├── tools/            # Tool registry + 16 standard tools
-│   ├── controller.py     # Wires UI ↔ engines via signals/slots
-│   ├── models.py         # TaskState, Plan, Action, results, records
-│   ├── intent_parser.py  # Local command → Plan parser (no AI)
-│   ├── app_launcher.py   # Alias-based app launcher (Popen)
-│   ├── terminal.py       # Terminal engine (streamed, cancellable)
-│   ├── automation.py     # pyautogui/xdotool input automation
-│   ├── plan_executor.py  # QThread plan runner + emergency stop
-│   ├── vision.py         # mss/Pillow capture: QImage + PIL frames, multi-monitor
-│   ├── ocr.py            # EasyOCR text detection + find_text (offline)
-│   ├── learn_mode.py     # WorkflowRecorder: clicks/keys/typing → steps
-│   ├── workflow_player.py# OCR-first workflow replay + retries + progress
-│   ├── task_manager.py   # Milestone 1 simulation lifecycle
-│   ├── task_worker.py    # Simulated worker
-│   ├── voice_service.py  # Voice placeholder service
-│   └── providers/        # OpenAI / Ollama / Auto + injectable transport
-├── database/             # SQLite persistence
-│   ├── db_manager.py     # Connection + schema bootstrap
-│   ├── schema.sql        # task_runs, action_history, workflows, workflow_steps
-│   ├── task_repository.py
-│   ├── action_repository.py
-│   ├── workflow_repository.py
-│   └── agent_repository.py
-└── ui/                   # Qt widgets (no business logic)
-    ├── main_window.py    # Command + Learn pages, nav, status
-    ├── learn_page.py     # Learn page (record/save/play workflows, preview)
-    ├── settings_dialog.py# AI Engine settings (provider, privacy, API key)
-    ├── popup.py          # Execution popup (steps, recording/playback)
-    ├── theme.py          # Palette + QSS loader
-    └── widgets.py        # StatusIndicator, StatusDot, HintLabel
-└── tests/                # Pytest suite (providers mocked, no key/Ollama needed)
+```python
+registry.register(WeatherTool())           # core/agent_controller.py build step,
+                                           # or a plugin (see §16)
 ```
 
-## Architecture notes
+That's the whole process used by all 16 built-in tools (`core/tools/*`) — each is independently
+testable with its own name, description, schema, safety classification and `execute()`.
 
-- **Layering** — `UI → Agent Controller → Agent → Tool Registry → Safety Manager → existing Control/Vision/Workflow engines`. The LLM never touches the OS directly and never executes generated code.
+## 15. Adding a new provider
 
-- **UI / logic separation** — widgets expose signals and dumb setters; `core/` never imports widgets except `controller.py`, the single composition point.
-- **Signals/slots everywhere** — worker threads → controller → windows (`step_started`, `step_finished`, `output_line`, `plan_completed`); cross-thread delivery stays queued, so the UI never freezes.
-- **Execution model** — `PlanExecutor` owns one `QThread` + `PlanWorker` per plan (standard `quit`/`deleteLater` teardown). Failures abort remaining steps; `emergency_stop()` is safe from any thread.
-- **Terminal safety** — commands run without a shell unless they contain shell metacharacters (then explicit `sh -c`); the process runs in its own session and is killed by process group on cancel.
-- **Automation safety** — `pyautogui.FAILSAFE` (mouse-corner abort), cooperative abort checks between typing chunks, `xdotool` fallback behind the same `InputBackend` interface.
-- **No hardcoded paths** — assets resolve from the project root; databases live in `QStandardPaths.AppLocalDataLocation` (overridable via `SCREENAI_DATA_DIR`).
-- **Learn pipeline** — `pynput` listeners (lazy, so headless import is safe) feed `WorkflowRecorder`, which coalesces raw events into `LearnedStep`s (typing runs, double-click merge, `Ctrl+S`-style hotkeys). The player replays in a `QThread` with OCR-first targeting, saved-coordinate fallback and bounded retries; recording and playback are stoppable from any thread.
-- **Providers untouched** — `core.providers.create_provider("openai" | "ollama")` stays the AI integration point for a later milestone.
+Implement `core.providers.base.AIProvider` — three methods, no UI knowledge required:
 
-## Testing
+```python
+from core.providers.base import AIProvider, ProviderNotConfigured
 
-```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/ -q
-python -m pyflakes main.py core ui database tests
+class MyProvider(AIProvider):
+    def __init__(self, model: str, **kwargs):
+        super().__init__(name="my-provider", is_cloud=True, model=model)
+
+    def is_available(self) -> bool:
+        return True                       # report configuration state honestly
+
+    def generate(self, prompt: str, *, context=None) -> str:
+        ...
+
+    def chat(self, messages, *, stream_cb=None) -> str:
+        ...
 ```
 
-The suite covers OpenAI/Ollama/Auto providers (mocked transport — no API key, no Ollama), tool schemas and execution, safety classification, the confirmation flow end-to-end through the controller, the agent loop (protocol errors, bounded retries, cancellation), memory persistence and Milestone 1–3 regressions.
+Then expose it in `core/providers/factory.py` (one entry in the provider map + settings keys).
+The settings UI, wizard, agent, history labels and diagnostics pick it up automatically.
+The same pattern applies to **voice engines** (`core.voice.VoiceProvider`: `record()` +
+`transcribe()` — see `core/voice/whisper_provider.py`) and **automation backends** /
+**vision backends** (small interfaces in their packages).
 
-## Roadmap
+## 16. Adding a new plugin
 
-- Later — real Pause/Resume, voice input capture, history UI, Wayland-native automation, workflow editing, multimodal screen input for vision-capable models.
+Plugins are an **internal extension architecture** (there is no marketplace). A plugin can
+register **tools**, **commands**, **settings**, and an optional **UI page** — without modifying
+the core agent.
+
+```python
+from core.plugins import Plugin, PluginContext, Command, SettingDef, UIPage
+
+class MyPlugin(Plugin):
+    def __init__(self):
+        super().__init__(name="my-plugin", version="1.0.0", description="…")
+
+    def on_load(self, context: PluginContext) -> None:
+        context.register_tool(MyTool())                    # Tool instance (§14)
+        context.register_command(Command("my_cmd", "Run thing", lambda: "done"))
+        context.register_setting(SettingDef("my.key", "My option", "default"))
+        context.register_page(UIPage("My Page", widget_factory=make_widget))  # optional
+
+PLUGIN_CLASS = MyPlugin
+```
+
+Drop the file into `~/.local/share/ScreenAI/plugins/` — ScreenAI loads it at startup
+(never from this repository's tree automatically). See
+[`examples/photoshop_plugin.py`](examples/photoshop_plugin.py) for a full example: a
+Photoshop bridge registering three Photoshop tools, a command, a setting and a UI page
+**without touching the core agent**. Plugin load errors are collected and reported in the
+diagnostics export; a broken plugin never crashes the app.
+
+## 17. Experimental features
+
+These work but are marked **experimental** — APIs may change and they need optional pip
+dependencies:
+
+- **Voice transcription** (push-to-talk → text): needs `faster-whisper`; the interface
+  (`VoiceProvider`) is stable. Without it, typed input is fully supported.
+- **OCR** (EasyOCR): needs `pip install easyocr` (large first-run model download).
+- **Plugins / example plugin**: the internal plugin API (`core.plugins`) is usable but young;
+  `examples/photoshop_plugin.py` is documentation-grade and ships **not** auto-loaded.
+- **First-run wizard reset** (Settings → Interface) re-runs the wizard — handy for re-probing
+  capabilities after fixing permissions.
+- **Auto-composer** (natural intent → workflow draft) suggests drafts; it never auto-saves a
+  workflow without you.
+
+---
+
+MIT-style personal project. Report issues at the project repository.

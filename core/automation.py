@@ -186,6 +186,20 @@ class Automation:
     def __init__(self, backend: InputBackend | None = None) -> None:
         self._backend = backend
         self._stop = threading.Event()
+        self._typing_interval = 0.02
+        self._action_delay = 0.0
+
+    def configure(
+        self, *, typing_speed_ms: int = 24, action_delay_ms: int = 0
+    ) -> None:
+        """User-tunable pacing (Settings → Automation)."""
+        self._typing_interval = max(1, int(typing_speed_ms)) / 1000.0
+        self._action_delay = max(0, int(action_delay_ms)) / 1000.0
+
+    def _settle(self) -> None:
+        """Abort-checked pause after an action (user-configured delay)."""
+        if self._action_delay > 0 and self._stop.wait(self._action_delay):
+            raise AutomationStopped("emergency stop during action delay")
 
     @property
     def backend_name(self) -> str:
@@ -220,20 +234,23 @@ class Automation:
         self._check()
         self._resolve_backend().double_click(x, y)
 
-    def type_text(self, text: str, interval: float = 0.02) -> None:
+    def type_text(self, text: str, interval: float | None = None) -> None:
         backend = self._resolve_backend()
+        step = self._typing_interval if interval is None else interval
         for start in range(0, len(text), _TYPE_CHUNK):
             self._check()
-            backend.type_text(text[start : start + _TYPE_CHUNK], interval)
+            backend.type_text(text[start : start + _TYPE_CHUNK], step)
 
     def press(self, key: str) -> None:
         self._check()
         self._resolve_backend().press(self._canonical(key))
+        self._settle()
 
     def hotkey(self, combo: str) -> None:
         keys = tuple(self._canonical(part) for part in combo.replace("+", " ").split())
         self._check()
         self._resolve_backend().hotkey(keys)
+        self._settle()
 
     # ------------------------------------------------------------ internal
 

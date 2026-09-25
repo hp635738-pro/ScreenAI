@@ -1,6 +1,24 @@
-"""Pytest bootstrap: headless Qt, temp data dir, repo root on sys.path."""
+"""Shared test configuration: offscreen Qt, isolated data dir, crash-avoidance."""
 
 from __future__ import annotations
+
+# Pre-import C-extension GUI/shm libraries BEFORE any Qt object exists.
+# Importing mss mid-suite can trigger a GC pass that hard-crashes inside
+# shiboken/PySide6 wrappers — pull it in while the heap is still clean and
+# freeze old objects so later GC passes never traverse them.
+import gc
+
+try:
+    import mss  # noqa: F401
+except Exception:  # noqa: BLE001
+    mss = None
+
+gc.freeze()
+# Automatic cycle-collection traverses live PySide6 wrappers and hard-crashes
+# inside shiboken in this headless/stubbed-GL environment (seen as
+# "Garbage-collecting" segfaults). Tests are short-lived and the session exits
+# via os._exit — run them with the GC disabled.
+gc.disable()
 
 import os
 import sys
@@ -72,3 +90,37 @@ def _ctx(services: dict):  # noqa: ANN202
     from core.tools.standard import ToolContext
 
     return ToolContext(**services)
+
+
+_EXIT_STATUS = 0
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ANN001
+    global _EXIT_STATUS
+    _EXIT_STATUS = exitstatus
+
+
+def _patch_terminal_reporter() -> None:
+    """Exit only AFTER the final "N passed / M failed" stats line prints.
+
+    PySide6 teardown hard-crashes this interpreter at shutdown (stubbed GL
+    in CI); os._exit once reporting is fully done avoids the crash window.
+    """
+    import os as _os
+    import sys as _sys
+
+    from _pytest.terminal import TerminalReporter
+
+    original = TerminalReporter.summary_stats
+
+    def summary_stats_then_exit(self, *args, **kwargs):  # noqa: ANN001, ANN202
+        result = original(self, *args, **kwargs)
+        _sys.stdout.flush()
+        _sys.stderr.flush()
+        _os._exit(_EXIT_STATUS)
+        return result  # pragma: no cover
+
+    TerminalReporter.summary_stats = summary_stats_then_exit
+
+
+_patch_terminal_reporter()

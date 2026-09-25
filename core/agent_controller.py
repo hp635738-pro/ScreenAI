@@ -224,6 +224,7 @@ class AgentController(QObject):
     tool_finished = Signal(object)  # AgentEvent
     finished = Signal(object)  # AgentResult
     notice = Signal(str)
+    paused = Signal(bool)
 
     def __init__(
         self,
@@ -253,6 +254,7 @@ class AgentController(QObject):
         self._workflow_repo = workflows
         self._gui = GuiBridge(self)
         self._cancel_event = threading.Event()
+        self._pause_event = threading.Event()
         self._ticket: ConfirmationTicket | None = None
         self._thread: threading.Thread | None = None
         self._running = False
@@ -280,6 +282,7 @@ class AgentController(QObject):
             self.notice.emit(reason)
             return False
         self._cancel_event = threading.Event()
+        self._pause_event.clear()
         self._running = True
         self._thread = threading.Thread(
             target=self._run, args=(command,), daemon=True
@@ -287,8 +290,31 @@ class AgentController(QObject):
         self._thread.start()
         return True
 
+    @property
+    def is_paused(self) -> bool:
+        return self._pause_event.is_set()
+
+    def pause(self) -> None:
+        """Stop starting new actions; the current step finishes safely."""
+        if not self._running:
+            self.notice.emit("No running task to pause.")
+            return
+        if self._pause_event.is_set():
+            return
+        self._pause_event.set()
+        self.paused.emit(True)
+        self.status.emit("Paused")
+
+    def resume(self) -> None:
+        if not self._pause_event.is_set():
+            return
+        self._pause_event.clear()
+        self.paused.emit(False)
+        self.status.emit("Resuming")
+
     def cancel(self) -> None:
         self._cancel_event.set()
+        self._pause_event.clear()
         ticket = self._ticket
         if ticket is not None:
             ticket.approved = False
@@ -342,6 +368,9 @@ class AgentController(QObject):
                     memory=memory,
                 )
             )
+            hook = getattr(self, "_tool_hook", None)
+            if hook is not None:
+                hook(registry)
             agent = Agent(
                 provider,
                 registry,
@@ -352,6 +381,7 @@ class AgentController(QObject):
                 confirm_cb=self._confirm,
                 event_cb=self.tool_finished.emit,
                 cancel_event=self._cancel_event,
+                pause_event=self._pause_event,
             )
             self._automation.reset()
             result = agent.run(command)
