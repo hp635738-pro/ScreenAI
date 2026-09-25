@@ -21,6 +21,7 @@ from ui.widgets import HintLabel, StatusIndicator
 
 class MainWindow(QMainWindow):
     run_requested = Signal(str)
+    stop_requested = Signal()
     voice_requested = Signal()
 
     def __init__(self) -> None:
@@ -50,7 +51,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel(Config.APP_NAME)
         title.setObjectName("appTitle")
-        subtitle = QLabel("Command launcher · Milestone 1")
+        subtitle = QLabel("Control engine · Milestone 2")
         subtitle.setObjectName("appSubtitle")
 
         title_box.addWidget(title)
@@ -69,7 +70,7 @@ class MainWindow(QMainWindow):
         self._command_input = QLineEdit()
         self._command_input.setObjectName("commandInput")
         self._command_input.setPlaceholderText(
-            "Enter a command… e.g. “Summarize the text on screen”"
+            "Enter a command… e.g. “open firefox then type hello world”"
         )
         self._command_input.setClearButtonEnabled(True)
         layout.addWidget(self._command_input)
@@ -83,19 +84,27 @@ class MainWindow(QMainWindow):
         self._voice_button.setIcon(QIcon(str(Config.asset_path("icons", "mic.svg"))))
         self._voice_button.setToolTip("Voice input — placeholder in this milestone")
 
+        self._stop_button = QPushButton("Stop")
+        self._stop_button.setObjectName("stopButton")
+        self._stop_button.setToolTip(
+            "Emergency stop — immediately cancel any running automation"
+        )
+        self._stop_button.setEnabled(False)
+
         self._run_button = QPushButton("Run")
         self._run_button.setObjectName("runButton")
         self._run_button.setIcon(QIcon(str(Config.asset_path("icons", "run.svg"))))
         self._run_button.setDefault(True)
 
         buttons.addWidget(self._voice_button)
+        buttons.addWidget(self._stop_button)
         buttons.addWidget(self._run_button)
         layout.addLayout(buttons)
 
         layout.addStretch(1)
 
         self._hint = HintLabel(
-            "AI providers are not connected yet — executions are simulated."
+            "Try: open firefox · open vscode then type hi · run ls -la · press ctrl+c"
         )
         self._hint.setMinimumHeight(18)
         layout.addWidget(self._hint)
@@ -104,6 +113,7 @@ class MainWindow(QMainWindow):
 
     def _wire(self) -> None:
         self._run_button.clicked.connect(self._emit_run)
+        self._stop_button.clicked.connect(self.stop_requested)
         self._voice_button.clicked.connect(self.voice_requested)
         self._command_input.returnPressed.connect(self._emit_run)
 
@@ -120,7 +130,9 @@ class MainWindow(QMainWindow):
 
     def set_state(self, state: TaskState) -> None:
         self._status.set_state(state)
-        self._run_button.setEnabled(state is not TaskState.WORKING)
+        busy = state is TaskState.WORKING
+        self._run_button.setEnabled(not busy)
+        self._stop_button.setEnabled(busy)
 
     def show_notice(self, text: str) -> None:
         self._hint.show_temporary(text)

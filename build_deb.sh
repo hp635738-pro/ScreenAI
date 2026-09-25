@@ -59,14 +59,16 @@ Version: ${APP_VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.12), python3-pyside6.qtwidgets, python3-pyside6.qtsvg
+Depends: python3 (>= 3.12), python3-pyside6.qtwidgets, python3-pyside6.qtsvg, python3-pyautogui
+Recommends: xdotool
 Maintainer: ${MAINTAINER}
 Homepage: ${HOMEPAGE}
-Description: AI-powered screen assistant with floating execution popup
- ScreenAI is a personal desktop assistant for Kubuntu/KDE. Milestone 1
- ships the dark-themed main window, the frameless always-on-top execution
- popup and the task framework (AI providers are integrated in a later
- milestone).
+Description: AI-powered screen assistant and desktop control engine
+ ScreenAI is a personal desktop assistant for Kubuntu/KDE. It parses
+ natural commands locally and executes them: launching applications,
+ running terminal commands and driving mouse/keyboard automation with
+ a floating always-on-top execution popup and a global emergency stop.
+ (AI providers are integrated in a later milestone.)
 EOF
 
 cat > "${STAGE}/usr/bin/${APP_NAME}" <<EOF

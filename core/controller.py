@@ -1,4 +1,4 @@
-"""Application controller: wires UI, task execution and persistence.
+"""Application controller: wires UI, control engines and persistence.
 
 This is the only place that knows about both sides; windows and services
 stay independent and communicate through signals and slots.
@@ -6,11 +6,17 @@ stay independent and communicate through signals and slots.
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QObject, Slot
 
-from core.models import TaskState
+from core.app_launcher import AppLauncher
+from core.intent_parser import IntentParser
+from core.models import ActionResult, ActionType, PlanResult, TaskState
+from core.plan_executor import PlanExecutor
 from core.task_manager import TaskManager
 from core.voice_service import VoiceService
+from database.action_repository import ActionRepository
 from database.db_manager import DatabaseManager
 from database.task_repository import TaskRepository
 from ui.main_window import MainWindow
@@ -22,11 +28,21 @@ class ApplicationController(QObject):
         super().__init__()
         self._window = MainWindow()
         self._popup = ExecutionPopup()
-        self._tasks = TaskManager(self)
+        self._launcher = AppLauncher()
+        self._parser = IntentParser(
+            known_apps=AppLauncher.known_names,
+            display_name=AppLauncher.display_name,
+        )
+        self._executor = PlanExecutor(self, launcher=self._launcher)
+        self._tasks = TaskManager(self)  # Milestone 1 simulation engine
         self._voice = VoiceService(self)
         self._db = DatabaseManager()
         self._repository = TaskRepository(self._db)
+        self._action_repository = ActionRepository(self._db)
         self._current_run_id: int | None = None
+        self._active_command = ""
+        self._run_started = 0.0
+        self._simulate_run = False
 
         self._wire()
 
@@ -35,12 +51,13 @@ class ApplicationController(QObject):
     def _wire(self) -> None:
         window = self._window
         window.run_requested.connect(self._on_run_requested)
+        window.stop_requested.connect(self._on_stop_requested)
         window.voice_requested.connect(self._voice.start_listening)
         self._voice.notice.connect(window.show_notice)
 
         popup = self._popup
-        popup.pause_requested.connect(self._tasks.pause)
-        popup.stop_requested.connect(self._tasks.stop)
+        popup.pause_requested.connect(self._on_pause_requested)
+        popup.stop_requested.connect(self._on_stop_requested)
         popup.restore_requested.connect(self._on_restore_requested)
         popup.dismiss_requested.connect(self._on_dismiss_requested)
 
@@ -50,6 +67,13 @@ class ApplicationController(QObject):
         tasks.failed.connect(self._on_task_failed)
         tasks.notice.connect(self._on_task_notice)
 
+        executor = self._executor
+        executor.step_started.connect(self._on_step_started)
+        executor.step_finished.connect(self._on_step_finished)
+        executor.output_line.connect(self._on_output_line)
+        executor.plan_completed.connect(self._on_plan_completed)
+        executor.notice.connect(self._on_task_notice)
+
     # ---------------------------------------------------------- lifecycle
 
     def start(self) -> None:
@@ -58,6 +82,7 @@ class ApplicationController(QObject):
 
     def shutdown(self) -> None:
         self._window.save_geometry()
+        self._executor.shutdown()
         self._tasks.shutdown()
         self._db.close()
 
@@ -69,16 +94,53 @@ class ApplicationController(QObject):
         if not command:
             self._window.show_notice("Enter a command before running.")
             return
-        if self._tasks.is_running:
-            self._window.show_notice("A task is already running.")
+        if self._tasks.is_running or self._executor.is_running:
+            self._window.show_notice("A task is already running — press Stop to cancel.")
             return
 
+        plan = self._parser.parse(command)
+        if not any(action.type is not ActionType.UNKNOWN for action in plan.actions):
+            detail = plan.actions[0].description if plan.actions else "Empty command"
+            self._window.show_notice(
+                f"{detail}. Try: open firefox · run ls -la · type hi · press ctrl+c"
+            )
+            self._action_repository.record(command, "Unrecognized command", False, 0.0)
+            return
+
+        self._active_command = command
+        self._run_started = time.monotonic()
         self._current_run_id = self._repository.create_run(command)
         self._window.set_state(TaskState.WORKING)
         self._window.minimize()
-        self._popup.begin_task(command)
+
+        # A single simulated step keeps using the Milestone 1 TaskManager path.
+        if len(plan.actions) == 1 and plan.actions[0].type is ActionType.SIMULATE:
+            self._simulate_run = True
+            self._popup.begin_task(command)
+            self._popup.show_popup()
+            self._tasks.start(plan.actions[0].params["task"])
+            return
+
+        self._simulate_run = False
+        self._popup.begin_plan(command, plan.total_steps)
         self._popup.show_popup()
-        self._tasks.start(command)
+        self._executor.execute(plan)
+
+    @Slot()
+    def _on_stop_requested(self) -> None:
+        """Global emergency stop: cancels whatever is executing."""
+        if self._executor.is_running:
+            self._executor.emergency_stop()
+        if self._tasks.is_running:
+            self._tasks.stop()
+        if not self._executor.is_running and not self._tasks.is_running:
+            self._window.show_notice("Nothing is running.")
+
+    @Slot()
+    def _on_pause_requested(self) -> None:
+        message = "Pause is a UI placeholder in this milestone."
+        self._popup.show_notice(message)
+        self._window.show_notice(message)
 
     @Slot()
     def _on_restore_requested(self) -> None:
@@ -92,8 +154,49 @@ class ApplicationController(QObject):
     def _on_progress(self, text: str) -> None:
         self._popup.set_progress(text)
 
+    @Slot(int, int, str)
+    def _on_step_started(self, index: int, total: int, description: str) -> None:
+        self._popup.set_step(index, total)
+        self._popup.set_progress(description)
+
+    @Slot(object)
+    def _on_step_finished(self, result: ActionResult) -> None:
+        self._action_repository.record(
+            self._active_command,
+            result.action.description,
+            result.success,
+            result.duration,
+        )
+
+    @Slot(str)
+    def _on_output_line(self, text: str) -> None:
+        if text.strip():
+            self._popup.show_live(text.strip()[:120])
+
+    @Slot(object)
+    def _on_plan_completed(self, result: PlanResult) -> None:
+        if result.cancelled:
+            state = TaskState.ERROR
+            summary = f"Emergency stop — {result.summary.lower()}"
+            popup_progress = "Stopped"
+        elif result.success:
+            state = TaskState.DONE
+            summary = result.summary
+            popup_progress = "Completed"
+        else:
+            state = TaskState.ERROR
+            summary = result.first_error or "Execution failed"
+            popup_progress = "Failed"
+
+        self._finish_run(state, summary)
+        self._window.set_state(state)
+        self._window.show_notice(summary)
+        self._popup.set_state(state)
+        self._popup.set_progress(popup_progress)
+
     @Slot(str)
     def _on_task_finished(self, result: str) -> None:
+        self._record_simulate_action(True)
         self._finish_run(TaskState.DONE, result)
         self._window.set_state(TaskState.DONE)
         self._window.show_notice(result)
@@ -102,6 +205,7 @@ class ApplicationController(QObject):
 
     @Slot(str)
     def _on_task_failed(self, message: str) -> None:
+        self._record_simulate_action(False)
         self._finish_run(TaskState.ERROR, message)
         self._window.set_state(TaskState.ERROR)
         self._window.show_notice(f"Error: {message}")
@@ -112,6 +216,18 @@ class ApplicationController(QObject):
     def _on_task_notice(self, text: str) -> None:
         self._popup.show_notice(text)
         self._window.show_notice(text)
+
+    # ------------------------------------------------------------ helpers
+
+    def _record_simulate_action(self, success: bool) -> None:
+        if self._simulate_run:
+            self._action_repository.record(
+                self._active_command,
+                "Simulated run",
+                success,
+                time.monotonic() - self._run_started,
+            )
+            self._simulate_run = False
 
     def _finish_run(self, state: TaskState, result: str) -> None:
         if self._current_run_id is not None:

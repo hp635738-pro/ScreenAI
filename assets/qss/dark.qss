@@ -155,3 +155,29 @@ QToolTip {
     border: 1px solid #323552;
     padding: 4px 8px;
 }
+
+QPushButton#stopButton {
+    border-color: #5A3240;
+    color: #F87171;
+}
+
+QPushButton#stopButton:hover {
+    background-color: #3A2230;
+    border-color: #F87171;
+}
+
+QPushButton#stopButton:pressed {
+    background-color: #2A1820;
+}
+
+QPushButton#stopButton:disabled {
+    color: #6A5058;
+    background-color: #1B1C2B;
+    border-color: #3A2C34;
+}
+
+QLabel#stepLabel {
+    color: #A8B8FF;
+    font-size: 12px;
+    font-weight: 600;
+}

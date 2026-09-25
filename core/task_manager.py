@@ -63,8 +63,12 @@ class TaskManager(QObject):
         self.notice.emit("Pause is a UI placeholder in this milestone.")
 
     def stop(self) -> None:
-        """Placeholder: real cancellation will call ``TaskWorker.request_stop()``."""
-        self.notice.emit("Stop is a UI placeholder in this milestone.")
+        """Emergency stop: cooperatively cancel the simulated task."""
+        if self._worker is not None:
+            self._worker.request_stop()
+            self.notice.emit("Stopping the simulated task…")
+        else:
+            self.notice.emit("Nothing is running.")
 
     def shutdown(self) -> None:
         if self._worker is not None:

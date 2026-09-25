@@ -85,23 +85,31 @@ class ExecutionPopup(QWidget):
         self._status = StatusIndicator()
         self._pass_through(self._status)
 
-        self._progress_label = QLabel()
-        self._progress_label.setObjectName("progressLabel")
-        self._pass_through(self._progress_label)
+        self._step_label = QLabel()
+        self._step_label.setObjectName("stepLabel")
+        self._step_label.hide()
+        self._pass_through(self._step_label)
 
         status_row.addWidget(self._status)
         status_row.addStretch(1)
-        status_row.addWidget(self._progress_label)
+        status_row.addWidget(self._step_label)
         layout.addLayout(status_row)
+
+        self._progress_label = QLabel()
+        self._progress_label.setObjectName("progressLabel")
+        self._pass_through(self._progress_label)
+        layout.addWidget(self._progress_label)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self._pause_button = QPushButton("Pause")
         self._pause_button.setObjectName("pauseButton")
-        self._pause_button.setToolTip("UI placeholder — real pause arrives with AI integration")
+        self._pause_button.setToolTip(
+            "UI placeholder — real pause arrives with AI integration"
+        )
         self._stop_button = QPushButton("Stop")
         self._stop_button.setObjectName("stopButton")
-        self._stop_button.setToolTip("UI placeholder — real stop arrives with AI integration")
+        self._stop_button.setToolTip("Emergency stop — immediately cancels running automation")
         self._restore_button = QPushButton("Restore")
         self._restore_button.setObjectName("restoreButton")
         self._restore_button.setToolTip("Reopen the main window")
@@ -134,11 +142,22 @@ class ExecutionPopup(QWidget):
     # ----------------------------------------------------------- interface
 
     def begin_task(self, command: str) -> None:
+        """Milestone 1 style single task display (simulation path)."""
         self._task_label.setText(command)
         self._task_label.setToolTip(command)
         self._progress_label.setText("Starting…")
-        self._notice.setText("")
+        self._step_label.hide()
+        self._notice.clear()
         self.set_state(TaskState.WORKING)
+
+    def begin_plan(self, command: str, total_steps: int) -> None:
+        """Multi-step plan display: shows 'Step x/N' during execution."""
+        self.begin_task(command)
+        self.set_step(1, total_steps)
+
+    def set_step(self, index: int, total: int) -> None:
+        self._step_label.setText(f"Step {index}/{total}")
+        self._step_label.show()
 
     def set_state(self, state: TaskState) -> None:
         self._status.set_state(state)
@@ -151,6 +170,10 @@ class ExecutionPopup(QWidget):
 
     def show_notice(self, text: str) -> None:
         self._notice.show_temporary(text)
+
+    def show_live(self, text: str) -> None:
+        """Show live streamed output without auto-clear."""
+        self._notice.show_live(text)
 
     def show_popup(self) -> None:
         self._reposition()

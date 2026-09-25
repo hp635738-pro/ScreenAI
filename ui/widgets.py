@@ -107,5 +107,14 @@ class HintLabel(QLabel):
         self.setText(text)
         self._timer.start(timeout_ms)
 
+    def show_live(self, text: str) -> None:
+        """Show a live message without auto-clear (e.g. streamed output)."""
+        self._timer.stop()
+        self.setText(text)
+
+    def clear(self) -> None:
+        self._timer.stop()
+        self.setText(self._default_text)
+
     def _restore(self) -> None:
         self.setText(self._default_text)
