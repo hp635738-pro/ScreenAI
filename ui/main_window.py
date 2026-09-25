@@ -26,6 +26,7 @@ class MainWindow(QMainWindow):
     run_requested = Signal(str)
     stop_requested = Signal()
     voice_requested = Signal()
+    settings_requested = Signal()
     page_changed = Signal(int)  # 0 = Command, 1 = Learn
 
     def __init__(self) -> None:
@@ -62,9 +63,13 @@ class MainWindow(QMainWindow):
         self._nav_group.setExclusive(True)
         self._nav_group.addButton(self._nav_command, 0)
         self._nav_group.addButton(self._nav_learn, 1)
+        self._settings_button = QPushButton("Settings")
+        self._settings_button.setObjectName("navButton")
+        self._settings_button.setToolTip("AI engine, privacy and confirmations")
         nav.addWidget(self._nav_command)
         nav.addWidget(self._nav_learn)
         nav.addStretch(1)
+        nav.addWidget(self._settings_button)
         outer.addLayout(nav)
 
         self._stack = QStackedWidget()
@@ -88,7 +93,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel(Config.APP_NAME)
         title.setObjectName("appTitle")
-        subtitle = QLabel("Control engine · Milestone 3")
+        subtitle = QLabel("AI desktop agent · Milestone 4")
         subtitle.setObjectName("appSubtitle")
 
         title_box.addWidget(title)
@@ -107,7 +112,7 @@ class MainWindow(QMainWindow):
         self._command_input = QLineEdit()
         self._command_input.setObjectName("commandInput")
         self._command_input.setPlaceholderText(
-            "Enter a command… e.g. “open firefox then type hello world”"
+            "Ask anything… e.g. “Open Firefox and click Export”"
         )
         self._command_input.setClearButtonEnabled(True)
         layout.addWidget(self._command_input)
@@ -141,7 +146,8 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         self._hint = HintLabel(
-            "Try: open firefox · open vscode then type hi · run ls -la · press ctrl+c"
+            "Try: Open Firefox · Open Konsole and run pwd · Find the Export button · "
+            "Take a screenshot and tell me what is visible"
         )
         self._hint.setMinimumHeight(18)
         layout.addWidget(self._hint)
@@ -154,6 +160,7 @@ class MainWindow(QMainWindow):
         self._voice_button.clicked.connect(self.voice_requested)
         self._command_input.returnPressed.connect(self._emit_run)
         self._nav_group.idClicked.connect(self._on_nav_clicked)
+        self._settings_button.clicked.connect(self.settings_requested)
 
     # ------------------------------------------------------------- signals
 

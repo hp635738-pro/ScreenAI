@@ -10,6 +10,7 @@ import time
 
 from PySide6.QtCore import QObject, Slot
 
+from core.agent_controller import AgentController
 from core.app_launcher import AppLauncher
 from core.automation import Automation
 from core.intent_parser import IntentParser
@@ -17,7 +18,10 @@ from core.learn_mode import WorkflowRecorder
 from core.models import ActionResult, ActionType, PlanResult, TaskState
 from core.ocr import OcrEngine
 from core.plan_executor import PlanExecutor
+from core.safety import SafetyManager
+from core.settings import SettingsStore
 from core.task_manager import TaskManager
+from core.terminal import TerminalEngine
 from core.vision import VisionEngine, VisionError
 from core.voice_service import VoiceService
 from core.workflow_player import StepPlaybackResult, WorkflowPlayer
@@ -55,6 +59,25 @@ class ApplicationController(QObject):
         self._repository = TaskRepository(self._db)
         self._action_repository = ActionRepository(self._db)
         self._workflow_repository = WorkflowRepository(self._db)
+        self._settings = SettingsStore()
+        self._safety = SafetyManager(
+            confirm_policy=str(self._settings.get("confirm_policy"))
+        )
+        self._terminal = TerminalEngine(self)
+        self._agent = AgentController(
+            self._settings,
+            self._safety,
+            self._launcher,
+            self._automation,
+            self._terminal,
+            self._vision,
+            self._ocr,
+            self._recorder,
+            self._player,
+            self._workflow_repository,
+            self,
+        )
+        self._agent_step_count = 0
         self._current_run_id: int | None = None
         self._active_command = ""
         self._run_started = 0.0
@@ -114,6 +137,19 @@ class ApplicationController(QObject):
         self._vision.frame_ready.connect(self._on_frame)
         self._vision.error.connect(self._on_vision_error)
 
+        popup.confirmation_responded.connect(self._agent.respond_to_confirmation)
+        window.settings_requested.connect(self._on_settings_requested)
+
+        agent = self._agent
+        agent.started.connect(self._on_agent_started)
+        agent.status.connect(self._on_agent_status)
+        agent.live.connect(self._popup.show_live)
+        agent.confirmation_required.connect(self._on_agent_confirmation)
+        agent.learning_started.connect(self._on_agent_learning_started)
+        agent.tool_finished.connect(self._on_agent_tool_finished)
+        agent.finished.connect(self._on_agent_finished)
+        agent.notice.connect(self._on_task_notice)
+
     # ---------------------------------------------------------- lifecycle
 
     def start(self) -> None:
@@ -122,6 +158,7 @@ class ApplicationController(QObject):
 
     def shutdown(self) -> None:
         self._window.save_geometry()
+        self._agent.cancel()
         self._recorder.stop()
         self._player.shutdown()
         self._vision.shutdown()
@@ -135,6 +172,7 @@ class ApplicationController(QObject):
             or self._executor.is_running
             or self._player.is_running
             or self._recorder.is_recording
+            or self._agent.is_running
         )
 
     # ------------------------------------------------- command execution
@@ -149,6 +187,27 @@ class ApplicationController(QObject):
             self._window.show_notice("A task is already running — press Stop to cancel.")
             return
 
+        if not command.lower().startswith("simulate") and self._try_agent(command):
+            return
+        self._run_legacy(command)
+
+    def _try_agent(self, command: str) -> bool:
+        """Route through the AI agent when a provider is configured."""
+        if not self._agent.can_run()[0]:
+            return False
+        if not self._agent.run(command):
+            return False
+        self._active_command = command
+        self._run_started = time.monotonic()
+        self._current_run_id = self._repository.create_run(command)
+        self._window.set_state(TaskState.WORKING)
+        self._window.minimize()
+        self._popup.begin_agent(command)
+        self._popup.show_popup()
+        return True
+
+    def _run_legacy(self, command: str) -> None:
+        """Milestone 2 local parser path (kept when no AI runs)."""
         plan = self._parser.parse(command)
         if not any(action.type is not ActionType.UNKNOWN for action in plan.actions):
             detail = plan.actions[0].description if plan.actions else "Empty command"
@@ -192,6 +251,9 @@ class ApplicationController(QObject):
             stopped = True
         if self._recorder.is_recording:
             self._on_stop_recording()
+            stopped = True
+        if self._agent.is_running:
+            self._agent.cancel()
             stopped = True
         if not stopped:
             self._window.show_notice("Nothing is running.")
@@ -387,6 +449,81 @@ class ApplicationController(QObject):
         self._window.show_notice(summary)
         self._popup.set_state(state)
         self._popup.set_progress(popup_progress)
+
+    # ---------------------------------------------------------- AI agent
+
+    @Slot(str, str)
+    def _on_agent_started(self, command: str, label: str) -> None:
+        self._agent_step_count = 0
+        self._window.show_notice(f"AI task via {label}")
+
+    @Slot(str)
+    def _on_agent_status(self, text: str) -> None:
+        self._popup.update_agent(text)
+
+    @Slot(str)
+    def _on_agent_confirmation(self, prompt: str) -> None:
+        self._popup.show_confirmation(prompt)
+        self._popup.show_popup()
+
+    @Slot()
+    def _on_agent_learning_started(self) -> None:
+        self._window.learn_page.set_recording(True)
+        self._window.set_state(TaskState.WORKING)
+        self._window.minimize()
+        self._popup.begin_recording()
+        self._popup.show_popup()
+
+    @Slot(object)
+    def _on_agent_tool_finished(self, event) -> None:  # noqa: ANN001
+        self._agent_step_count += 1
+        self._popup.set_step_text(f"Step {self._agent_step_count}")
+        duration = 0.0
+        self._action_repository.record(
+            self._active_command or "agent",
+            f"agent · {event.tool_name or 'note'}",
+            bool(event.success),
+            duration,
+        )
+
+    @Slot(object)
+    def _on_agent_finished(self, result) -> None:  # noqa: ANN001
+        self._popup.hide_confirmation()
+        fallback = (
+            not result.success
+            and result.steps == 0
+            and result.error_category
+            in ("provider_unavailable", "api_unavailable")
+        )
+        if result.cancelled:
+            state = TaskState.ERROR
+            summary = "Stopped."
+            popup_progress = "Stopped"
+        elif result.success:
+            state = TaskState.DONE
+            summary = result.summary
+            popup_progress = "Task completed"
+        else:
+            state = TaskState.ERROR
+            summary = result.summary or "Agent failed."
+            popup_progress = "Failed"
+        self._finish_run(state, summary)
+        self._window.set_state(state)
+        self._window.show_notice(summary[:140])
+        self._popup.set_state(state)
+        self._popup.set_progress(popup_progress)
+        if fallback:
+            self._window.show_notice("AI unavailable — using local command parser.")
+            self._run_legacy(self._active_command)
+
+    @Slot()
+    def _on_settings_requested(self) -> None:
+        from ui.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(
+            self._settings, self._safety, parent=self._window
+        )
+        dialog.exec()
 
     # -------------------------------------------------------- vision/preview
 

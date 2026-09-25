@@ -68,7 +68,8 @@ Description: AI-powered screen assistant and desktop control engine
  natural commands locally and executes them: launching applications,
  running terminal commands and driving mouse/keyboard automation with
  a floating always-on-top execution popup and a global emergency stop.
- (AI providers are integrated in a later milestone.)
+ (Milestone 4 AI brain: OpenAI/Ollama tool-using agent with a safety
+ manager, confirmation flow and learn-mode workflows.)
 EOF
 
 cat > "${STAGE}/usr/bin/${APP_NAME}" <<EOF

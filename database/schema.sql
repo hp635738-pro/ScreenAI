@@ -45,3 +45,39 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
 
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow
     ON workflow_steps (workflow_id, step_index);
+
+-- Milestone 4: agent memory and structured agent logs
+-- (agent_events doubles as the log: task, provider, tool, timing, outcome)
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT    NOT NULL UNIQUE,
+    user_command TEXT   NOT NULL,
+    provider    TEXT,
+    status      TEXT    NOT NULL DEFAULT 'running',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT    NOT NULL,
+    task           TEXT    NOT NULL,
+    provider       TEXT,
+    kind           TEXT    NOT NULL DEFAULT 'tool_call',
+    tool_name      TEXT,
+    arguments      TEXT,
+    result         TEXT,
+    success        INTEGER,
+    error_category TEXT,
+    started_at     TEXT,
+    ended_at       TEXT,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events (session_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_events_created ON agent_events (created_at DESC);
+
+CREATE VIEW IF NOT EXISTS agent_log AS
+    SELECT id, session_id AS session, task, provider, tool_name AS tool,
+           started_at, ended_at, success, error_category
+    FROM agent_events;

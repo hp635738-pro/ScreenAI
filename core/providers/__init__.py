@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.providers.auto_provider import AutoProvider
 from core.providers.base import (
     AIProvider,
     ProviderError,
@@ -14,6 +15,7 @@ from core.providers.openai_provider import OpenAIProvider
 _REGISTRY: dict[str, type[AIProvider]] = {
     OpenAIProvider.name: OpenAIProvider,
     OllamaProvider.name: OllamaProvider,
+    AutoProvider.name: AutoProvider,
 }
 
 __all__ = [
@@ -21,6 +23,7 @@ __all__ = [
     "ProviderError",
     "ProviderNotConfigured",
     "ProviderResponse",
+    "AutoProvider",
     "OllamaProvider",
     "OpenAIProvider",
     "available_providers",

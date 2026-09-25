@@ -271,3 +271,32 @@ QLabel#previewLabel {
     border-radius: 8px;
     color: #8A90B0;
 }
+
+/* Milestone 4: agent confirmation + settings */
+confirmButton {
+    background: #2A3A2E;
+    border: 1px solid #4ADE80;
+    color: #4ADE80;
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-weight: 600;
+}
+confirmButton:hover { background: #33472F; }
+declineButton {
+    background: #3A2A2E;
+    border: 1px solid #F87171;
+    color: #F87171;
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-weight: 600;
+}
+declineButton:hover { background: #472F33; }
+confirmLabel { color: #FBBF24; font-size: 12px; }
+settingsGroup {
+    border: 1px solid #323552;
+    border-radius: 10px;
+    margin-top: 6px;
+    padding-top: 8px;
+}
+settingsGroup::title { color: #9AA0B4; padding: 2px 6px; }
+keyStatus { color: #9AA0B4; font-size: 11px; }

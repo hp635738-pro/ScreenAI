@@ -24,6 +24,7 @@ class ExecutionPopup(QWidget):
     stop_requested = Signal()
     restore_requested = Signal()
     dismiss_requested = Signal()
+    confirmation_responded = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__(
@@ -100,6 +101,28 @@ class ExecutionPopup(QWidget):
         self._pass_through(self._progress_label)
         layout.addWidget(self._progress_label)
 
+        confirm_row = QHBoxLayout()
+        confirm_row.setSpacing(8)
+        self._confirm_button = QPushButton("Confirm")
+        self._confirm_button.setObjectName("confirmButton")
+        self._confirm_button.setToolTip("Approve the pending action")
+        self._confirm_button.hide()
+        self._decline_button = QPushButton("Cancel")
+        self._decline_button.setObjectName("declineButton")
+        self._decline_button.setToolTip("Decline the pending action")
+        self._decline_button.hide()
+        confirm_row.addWidget(self._confirm_button)
+        confirm_row.addWidget(self._decline_button)
+        confirm_row.addStretch(1)
+        layout.addLayout(confirm_row)
+
+        self._confirm_label = QLabel()
+        self._confirm_label.setObjectName("confirmLabel")
+        self._confirm_label.setWordWrap(True)
+        self._confirm_label.hide()
+        self._pass_through(self._confirm_label)
+        layout.addWidget(self._confirm_label)
+
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self._pause_button = QPushButton("Pause")
@@ -132,6 +155,8 @@ class ExecutionPopup(QWidget):
         self._stop_button.clicked.connect(self.stop_requested)
         self._restore_button.clicked.connect(self.restore_requested)
         self._dismiss_button.clicked.connect(self.dismiss_requested)
+        self._confirm_button.clicked.connect(lambda: self._respond_confirmation(True))
+        self._decline_button.clicked.connect(lambda: self._respond_confirmation(False))
         QShortcut("Esc", self, activated=self.dismiss_requested)
 
     @staticmethod
@@ -191,6 +216,37 @@ class ExecutionPopup(QWidget):
     def update_playback(self, index: int, total: int, message: str) -> None:
         self.set_step(index, total)
         self._progress_label.setText(message)
+
+    def begin_agent(self, command: str) -> None:
+        """Agent run: 'ScreenAI' + 'Understanding request…'."""
+        self._task_label.setText("ScreenAI")
+        self._task_label.setToolTip(command)
+        self._progress_label.setText("Understanding request…")
+        self.set_step_text("Step 0")
+        self._notice.clear()
+        self.hide_confirmation()
+        self.set_state(TaskState.WORKING)
+
+    def update_agent(self, status: str) -> None:
+        self._progress_label.setText(status)
+
+    def show_confirmation(self, prompt: str) -> None:
+        """Pause display: 'Waiting for confirmation' + [Confirm] [Cancel]."""
+        self._confirm_label.setText(prompt)
+        self._confirm_label.show()
+        self._confirm_button.show()
+        self._decline_button.show()
+        self._progress_label.setText("Waiting for confirmation")
+
+    def hide_confirmation(self) -> None:
+        self._confirm_label.hide()
+        self._confirm_button.hide()
+        self._decline_button.hide()
+
+    def _respond_confirmation(self, approved: bool) -> None:
+        self.hide_confirmation()
+        self._progress_label.setText("Continuing…" if approved else "Stopping…")
+        self.confirmation_responded.emit(approved)
 
     def set_state(self, state: TaskState) -> None:
         self._status.set_state(state)
